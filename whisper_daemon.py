@@ -25,7 +25,7 @@ from vc.config import WHISPER_DECODE
 
 SOCK_PATH = Path(os.environ.get("VOICE_WHISPER_SOCK", "/tmp/voice-claude-whisper.sock"))
 MODEL_SIZE = os.environ.get("VOICE_WHISPER_SIZE", "small")
-BEAM_SIZE = int(os.environ.get("VOICE_WHISPER_BEAM", "5"))
+BEAM_SIZE = int(os.environ.get("VOICE_WHISPER_BEAM", "3"))
 IDLE_TIMEOUT_S = float(os.environ.get("VOICE_WHISPER_IDLE", "1800"))  # 30 min
 LOG_FILE = Path.home() / ".local/share/voice-claude/voice_claude.log"
 
