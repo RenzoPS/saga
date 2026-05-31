@@ -71,6 +71,7 @@ class ClaudeProc:
         self.p = subprocess.Popen(
             args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL, text=True, bufsize=1,
+            start_new_session=True,   # grupo propio -> al matar, matamos TODO el árbol (subspawns de claude-mem incluidos)
         )
         self._session_flag = flag
         log(f"claude spawned ({flag} {sid[:8]}…) en {time.monotonic()-t0:.1f}s")
@@ -81,13 +82,17 @@ class ClaudeProc:
     def kill(self) -> None:
         if self.p and self.p.poll() is None:
             try:
-                self.p.terminate()
+                pgid = os.getpgid(self.p.pid)
+                os.killpg(pgid, signal.SIGTERM)   # mata el grupo entero (claude + subspawns de claude-mem)
                 try:
                     self.p.wait(timeout=2)
                 except subprocess.TimeoutExpired:
+                    os.killpg(pgid, signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                try:
                     self.p.kill()
-            except Exception:
-                pass
+                except Exception:
+                    pass
         self.p = None
 
     def reset(self) -> None:
