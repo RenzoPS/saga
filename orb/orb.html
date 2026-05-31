@@ -218,7 +218,7 @@ function frame(){
   const exPhase=0.5+0.5*Math.sin(t*1.15);                    // ciclo expandir/contraer (mirando pantalla)
   // modificadores de radio de la red por estado
   const voice=1+lvl*0.28*wSpeak;                             // hablando: toda la red late con la voz
-  const recExpand=1+(0.07+lvl*0.05+0.02*Math.sin(t*1.0))*wRec; // grabando: red mas expandida + late con el mic
+  const recExpand=1-0.82*wRec+(lvl*0.04)*wRec;               // grabando: la red COLAPSA al núcleo (queda solo el core)
   const expand=1+0.20*exPhase*wScreen;                       // mirando pantalla: se agranda y se contrae
   const scanGlow=exPhase*0.22*wScreen;                       // glow extra durante el escaneo
 
@@ -240,6 +240,7 @@ function frame(){
     for(const idx of [a,b]){ plexPos[pi*3]=nodePos[idx*3];plexPos[pi*3+1]=nodePos[idx*3+1];plexPos[pi*3+2]=nodePos[idx*3+2];
       const f=0.18; plexCol[pi*3]=cr*f;plexCol[pi*3+1]=cg*f;plexCol[pi*3+2]=cb*f; pi++; } }
   plexGeo.attributes.position.needsUpdate=true; plexGeo.attributes.color.needsUpdate=true;
+  plexMat.opacity=0.5*(1-0.7*wRec);   // grabando: las líneas casi desaparecen -> queda el núcleo
 
   // atención
   let s=0; const activePairs=[];
