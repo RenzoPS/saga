@@ -13,30 +13,6 @@ from .config import (
 from .runtime import log
 
 
-def hypr_notify(msg: str, color: str = "rgb(33aaff)", ms: int = 3000, icon: int = -1) -> None:
-    subprocess.Popen(
-        ["hyprctl", "notify", str(icon), str(ms), color, msg],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-
-
-def hypr_dismiss(n: int = 1) -> None:
-    subprocess.Popen(
-        ["hyprctl", "dismissnotify", str(n)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-
-
-def hypr_dismiss_all() -> None:
-    subprocess.Popen(
-        ["hyprctl", "dismissnotify"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-
-
 def take_screenshot() -> "Path | None":
     """Captura pantalla con grim. Devuelve path o None si fallo."""
     try:

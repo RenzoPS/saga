@@ -10,7 +10,6 @@ PID_FILE = Path("/tmp/voice-claude.pid")
 LOCK_FILE = Path("/tmp/voice-claude.lock")
 ABORT_FILE = Path("/tmp/voice-claude.abort")  # pid del último owner abortado (detección de zombie)
 AUDIO_FILE = Path("/tmp/voice-claude.wav")
-OUT_WAV = Path("/tmp/voice-claude-out.wav")
 LOG_FILE = PROJECT_DIR / "voice_claude.log"
 
 EDGE_VOICE = "es-AR-ElenaNeural"  # Microsoft Edge TTS, voz argentina femenina
@@ -24,6 +23,18 @@ WHISPER_BEAM = int(os.environ.get("VOICE_WHISPER_BEAM", "5"))  # beam amplio evi
 WHISPER_SOCK = Path("/tmp/voice-claude-whisper.sock")
 WHISPER_DAEMON = PROJECT_DIR / "whisper_daemon.py"
 WHISPER_IDLE_S = 1800  # daemon se autoapaga tras 30 min sin uso
+# Params de decodificación de Whisper, UNA sola fuente (los usan el daemon y el
+# fallback inline -> antes estaban duplicados y se desincronizaban). beam_size y
+# language van aparte. temperature como lista = fallback; no_repeat_ngram mata loops.
+WHISPER_DECODE = dict(
+    vad_filter=True,
+    condition_on_previous_text=False,
+    temperature=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
+    compression_ratio_threshold=2.4,
+    log_prob_threshold=-1.0,
+    no_speech_threshold=0.6,
+    no_repeat_ngram_size=3,
+)
 
 CLAUDE_MODEL = "haiku"
 # Saltar permisos de Claude (modo dios). Default ON para no romper el flujo actual;

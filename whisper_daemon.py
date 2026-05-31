@@ -18,6 +18,11 @@ import time
 import socket
 from pathlib import Path
 
+# params de decodificación compartidos con vc/ (una sola fuente, no duplicar).
+# El daemon se spawnea como `python /abs/whisper_daemon.py` -> PROJECT_DIR queda en path.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from vc.config import WHISPER_DECODE
+
 SOCK_PATH = Path(os.environ.get("VOICE_WHISPER_SOCK", "/tmp/voice-claude-whisper.sock"))
 MODEL_SIZE = os.environ.get("VOICE_WHISPER_SIZE", "small")
 BEAM_SIZE = int(os.environ.get("VOICE_WHISPER_BEAM", "5"))
@@ -36,19 +41,11 @@ def log(msg: str) -> None:
 
 
 def transcribe(model, audio_path: str, lang: str) -> str:
-    # Params identicos a la version inline de voice_claude.py: tuneados para ES
-    # con baja falsa activacion (vad_filter + thresholds anti-hallucination).
     segments, _info = model.transcribe(
         audio_path,
         language=lang,
         beam_size=BEAM_SIZE,
-        vad_filter=True,
-        condition_on_previous_text=False,
-        temperature=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0],  # fallback: reintenta si sale repetitivo/baja confianza
-        compression_ratio_threshold=2.4,
-        log_prob_threshold=-1.0,
-        no_speech_threshold=0.6,
-        no_repeat_ngram_size=3,  # prohíbe repetir trigramas -> mata loops "a ir a ir a ir"
+        **WHISPER_DECODE,   # tuneado para ES, anti-alucinación (fuente única en vc/config)
     )
     return " ".join(s.text.strip() for s in segments).strip()
 

@@ -12,6 +12,19 @@ import time
 
 from .config import PID_FILE, LOCK_FILE, LOG_FILE
 
+_LOG_MAX = 512 * 1024  # 512KB -> rota a .old (evita crecimiento infinito)
+
+
+def _rotate_log() -> None:
+    try:
+        if LOG_FILE.exists() and LOG_FILE.stat().st_size > _LOG_MAX:
+            LOG_FILE.replace(LOG_FILE.with_suffix(".log.old"))  # conserva 1 backup
+    except OSError:
+        pass
+
+
+_rotate_log()   # se chequea una vez por invocación (cada Win+Z es proceso nuevo)
+
 
 def log(msg: str) -> None:
     ts = time.strftime("%H:%M:%S")

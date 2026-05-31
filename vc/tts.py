@@ -89,9 +89,6 @@ class TTSStreamer:
 
     _SENTINEL = object()
 
-    RATE = 24000
-    BLK = 1024  # ~42.7ms por bloque
-
     def __init__(self) -> None:
         self._q: queue.Queue = queue.Queue()
         self._player: "subprocess.Popen | None" = None  # sink MP3 (decoder en chain, o mpg123 en fallback)

@@ -37,8 +37,8 @@ def touch_session() -> None:
         data = json.loads(SESSION_FILE.read_text())
         data["last_used"] = time.time()
         SESSION_FILE.write_text(json.dumps(data))
-    except (json.JSONDecodeError, KeyError, OSError):
-        pass
+    except (json.JSONDecodeError, KeyError, OSError) as e:
+        log(f"touch_session fail (contexto no persistido): {type(e).__name__}: {e}")
 
 
 def reset_session() -> str:

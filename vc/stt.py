@@ -14,6 +14,7 @@ from .config import (
     WHISPER_SIZE,
     WHISPER_BEAM,
     WHISPER_IDLE_S,
+    WHISPER_DECODE,
     AUDIO_FILE,
 )
 from .runtime import log, _cancel
@@ -119,13 +120,7 @@ def _transcribe_inline() -> str:
         str(AUDIO_FILE),
         language="es",
         beam_size=WHISPER_BEAM,
-        vad_filter=True,
-        condition_on_previous_text=False,
-        temperature=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0],  # fallback: reintenta si sale repetitivo/baja confianza
-        compression_ratio_threshold=2.4,
-        log_prob_threshold=-1.0,
-        no_speech_threshold=0.6,
-        no_repeat_ngram_size=3,  # prohíbe repetir trigramas -> mata loops "a ir a ir a ir"
+        **WHISPER_DECODE,   # params compartidos con el daemon (una sola fuente)
     )
     return " ".join(s.text.strip() for s in segments).strip()
 
