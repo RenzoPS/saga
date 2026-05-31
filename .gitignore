@@ -8,8 +8,8 @@ voice_claude.log
 session.json
 *.wav
 
-# scratch de tooling (brainstorms, etc)
-.superpowers/
+# todo lo de Claude (CLAUDE.md + superpowers): local, NO se commitea
+.claude/
 
 # temporales del sistema
 /tmp/
