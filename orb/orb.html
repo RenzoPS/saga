@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude · voice orb</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#04070b;font:14px system-ui,sans-serif;color:#9fc4d6}
+  #wrap{position:fixed;inset:0}
+  canvas{display:block}
+  #label{position:fixed;left:0;right:0;bottom:6%;text-align:center;font-size:clamp(14px,2.4vw,22px);
+         color:#eafaff;text-shadow:0 0 16px rgba(0,180,255,.45);letter-spacing:.3px;opacity:0;transition:opacity .4s;pointer-events:none;z-index:5}
+  #conn{position:fixed;top:12px;right:14px;font-size:11px;color:#3a5667;z-index:6}
+  #conn.ok{color:#2bd6a6} #conn.off{color:#e0556e}
+  #fallback{position:fixed;inset:0;display:none;align-items:center;justify-content:center;text-align:center;padding:30px;color:#9fc4d6;z-index:9}
+</style>
+</head>
+<body>
+<div id="wrap"></div>
+<div id="label"></div>
+<div id="conn">○</div>
+<div id="fallback"><div>No cargó WebGL/Three.js.<br>Verificá conexión y recargá.</div></div>
+
+<script type="importmap">
+{ "imports": {
+  "three":"/vendor/three/three.module.js",
+  "three/addons/":"/vendor/addons/"
+}}
+</script>
+<script type="module">
+let booted=false; setTimeout(()=>{if(!booted)document.getElementById('fallback').style.display='flex';},5000);
+try{
+const THREE=await import('three');
+const {EffectComposer}=await import('three/addons/postprocessing/EffectComposer.js');
+const {RenderPass}=await import('three/addons/postprocessing/RenderPass.js');
+const {UnrealBloomPass}=await import('three/addons/postprocessing/UnrealBloomPass.js');
+booted=true;
+
+// ===== estados (colores reales de voice_claude.py) — estructura A1: col/speed/energy =====
+const PH={
+  idle:     {col:[0.22,0.88,1.0], speed:0.10, energy:0.25, glyph:''},
+  rec:      {col:[1.00,0.33,0.47], speed:0.16, energy:0.55, glyph:'●  Grabando'},
+  transcribe:{col:[0.33,0.80,1.0],speed:0.20, energy:0.45, glyph:'◌  Transcribiendo'},
+  screen:   {col:[0.73,0.53,0.97], speed:0.15, energy:0.55, glyph:'👁  Mirando pantalla'},
+  think:    {col:[0.73,0.53,0.97], speed:0.22, energy:0.70, glyph:'✦  Pensando'},
+  speak:    {col:[0.30,0.92,0.70], speed:0.28, energy:1.00, glyph:'♪  Hablando'},
+  nueva:    {col:[0.33,1.00,0.60], speed:0.40, energy:0.90, glyph:'↻  Sesión nueva'},
+  error:    {col:[1.00,0.73,0.33], speed:0.20, energy:0.50, glyph:'◌  No te entendí'},
+  cancel:   {col:[1.00,0.33,0.47], speed:0.10, energy:0.40, glyph:'✕  Cancelado'}
+};
+const TRANSIENT={nueva:1.8,error:1.8,cancel:1.1};
+let mode='idle', target=PH.idle, cur={col:[...PH.idle.col],E:PH.idle.energy,S:PH.idle.speed};
+let transTimer=0;
+let extLvl=0, extLvlS=0, lastLvl=-9999;   // nivel de audio real (mic/TTS) via SSE
+// comportamiento por estado: pesos que entran/salen suave + transientes
+let wScreen=0, wRec=0, wSpeak=0;
+let appear=0, appearTarget=1, flashV=0, wobbleV=0;
+
+function setLabel(s){const el=document.getElementById('label');el.textContent=s||'';el.style.opacity=s?1:0;}
+function setState(name){
+  if(!PH[name]) name='idle';
+  mode=name; target=PH[name]; setLabel(PH[name].glyph);
+  appearTarget=(name==='cancel')?0:1;   // cancel colapsa
+  if(name==='nueva')flashV=1;            // destello al resetear sesión
+  if(name==='error')wobbleV=1;           // sacudida al no entender
+  transTimer=TRANSIENT[name]||0;
+}
+window.setState=setState;
+
+// ===== SSE =====
+(function connect(){
+  const es=new EventSource('/events'); const c=document.getElementById('conn');
+  es.onopen=()=>{c.textContent='●';c.className='ok';};
+  es.onerror=()=>{c.textContent='●';c.className='off';};
+  es.onmessage=e=>{ const d=e.data&&e.data.trim(); if(!d)return;
+    if(d.slice(0,4)==='lvl:'){ extLvl=parseFloat(d.slice(4))||0; lastLvl=performance.now(); }
+    else setState(d); };
+})();
+
+// ===== three (render A1 verbatim) =====
+const wrap=document.getElementById('wrap');
+const renderer=new THREE.WebGLRenderer({antialias:true,alpha:false});
+renderer.setPixelRatio(Math.min(2,devicePixelRatio));
+renderer.setSize(innerWidth,innerHeight);
+renderer.setClearColor(0x04070b,1);
+wrap.appendChild(renderer.domElement);
+
+const scene=new THREE.Scene();
+scene.fog=new THREE.FogExp2(0x04070b,0.085);
+const camera=new THREE.PerspectiveCamera(50,innerWidth/innerHeight,0.1,100);
+camera.position.set(0,0,6.4);
+const group=new THREE.Group(); scene.add(group);
+
+// ---- glow sprite texture ----
+function glowTex(){
+  const c=document.createElement('canvas');c.width=c.height=128;const g=c.getContext('2d');
+  const grd=g.createRadialGradient(64,64,0,64,64,64);
+  grd.addColorStop(0,'rgba(255,255,255,1)');grd.addColorStop(0.25,'rgba(255,255,255,0.85)');
+  grd.addColorStop(0.55,'rgba(255,255,255,0.25)');grd.addColorStop(1,'rgba(255,255,255,0)');
+  g.fillStyle=grd;g.fillRect(0,0,128,128);
+  return new THREE.CanvasTexture(c);
+}
+const GLOW=glowTex();
+
+// ---- nodos (fibonacci sphere) ----
+const N=110, R=2.35;
+const dir=[]; for(let i=0;i<N;i++){const y=1-(i/(N-1))*2,r=Math.sqrt(1-y*y),th=i*2.39996323;dir.push([Math.cos(th)*r,y,Math.sin(th)*r]);}
+const edges=[]; for(let i=0;i<N;i++)for(let j=i+1;j<N;j++){const dx=dir[i][0]-dir[j][0],dy=dir[i][1]-dir[j][1],dz=dir[i][2]-dir[j][2];if(dx*dx+dy*dy+dz*dz<0.20)edges.push([i,j]);}
+
+const nodePos=new Float32Array(N*3), nodeCol=new Float32Array(N*3), nodeSize=new Float32Array(N);
+const nodeGeo=new THREE.BufferGeometry();
+nodeGeo.setAttribute('position',new THREE.BufferAttribute(nodePos,3));
+nodeGeo.setAttribute('color',new THREE.BufferAttribute(nodeCol,3));
+nodeGeo.setAttribute('size',new THREE.BufferAttribute(nodeSize,1));
+const nodeMat=new THREE.ShaderMaterial({
+  uniforms:{ tex:{value:GLOW} },
+  transparent:true, depthWrite:false, blending:THREE.AdditiveBlending,
+  vertexShader:`attribute float size; attribute vec3 color; varying vec3 vC;
+    void main(){ vC=color; vec4 mv=modelViewMatrix*vec4(position,1.0);
+    gl_PointSize=size*(300.0/-mv.z); gl_Position=projectionMatrix*mv; }`,
+  fragmentShader:`uniform sampler2D tex; varying vec3 vC;
+    void main(){ vec4 t=texture2D(tex,gl_PointCoord); gl_FragColor=vec4(vC,1.0)*t; }`
+});
+const nodes=new THREE.Points(nodeGeo,nodeMat); group.add(nodes);
+
+// ---- plexus (aristas estables) ----
+const plexPos=new Float32Array(edges.length*2*3), plexCol=new Float32Array(edges.length*2*3);
+const plexGeo=new THREE.BufferGeometry();
+plexGeo.setAttribute('position',new THREE.BufferAttribute(plexPos,3));
+plexGeo.setAttribute('color',new THREE.BufferAttribute(plexCol,3));
+const plexMat=new THREE.LineBasicMaterial({vertexColors:true,transparent:true,opacity:0.5,blending:THREE.AdditiveBlending,depthWrite:false});
+const plex=new THREE.LineSegments(plexGeo,plexMat); group.add(plex);
+
+// ---- atención (haces dinámicos) ----
+const MAXATT=260;
+const attPos=new Float32Array(MAXATT*2*3), attCol=new Float32Array(MAXATT*2*3);
+const attGeo=new THREE.BufferGeometry();
+attGeo.setAttribute('position',new THREE.BufferAttribute(attPos,3));
+attGeo.setAttribute('color',new THREE.BufferAttribute(attCol,3));
+const attMat=new THREE.LineBasicMaterial({vertexColors:true,transparent:true,opacity:0.95,blending:THREE.AdditiveBlending,depthWrite:false});
+const att=new THREE.LineSegments(attGeo,attMat); group.add(att);
+const attNb=Array.from({length:N},()=>[]);
+for(let i=0;i<N;i++)for(let j=0;j<N;j++){if(i===j)continue;const dx=dir[i][0]-dir[j][0],dy=dir[i][1]-dir[j][1],dz=dir[i][2]-dir[j][2];if(dx*dx+dy*dy+dz*dz<0.8)attNb[i].push(j);}
+
+// ---- motas que viajan por los haces ----
+const MOTES=40;
+const motePos=new Float32Array(MOTES*3), moteCol=new Float32Array(MOTES*3), moteSize=new Float32Array(MOTES);
+const moteGeo=new THREE.BufferGeometry();
+moteGeo.setAttribute('position',new THREE.BufferAttribute(motePos,3));
+moteGeo.setAttribute('color',new THREE.BufferAttribute(moteCol,3));
+moteGeo.setAttribute('size',new THREE.BufferAttribute(moteSize,1));
+const moteMat=nodeMat.clone(); moteMat.uniforms.tex.value=GLOW;
+const motes=new THREE.Points(moteGeo,moteMat); group.add(motes);
+const moteState=Array.from({length:MOTES},()=>({a:0,b:0,t:Math.random(),sp:0.3+Math.random()*0.5}));
+
+// ---- polvo ambiental ----
+const DUST=160, dustPos=new Float32Array(DUST*3), dustSize=new Float32Array(DUST), dustCol=new Float32Array(DUST*3);
+for(let i=0;i<DUST;i++){const rr=R*(1.15+Math.random()*1.3),u=Math.random()*Math.PI*2,v=Math.acos(2*Math.random()-1);
+  dustPos[i*3]=rr*Math.sin(v)*Math.cos(u);dustPos[i*3+1]=rr*Math.cos(v);dustPos[i*3+2]=rr*Math.sin(v)*Math.sin(u);
+  dustSize[i]=0.03+Math.random()*0.05;}
+const dustGeo=new THREE.BufferGeometry();
+dustGeo.setAttribute('position',new THREE.BufferAttribute(dustPos,3));
+dustGeo.setAttribute('size',new THREE.BufferAttribute(dustSize,1));
+dustGeo.setAttribute('color',new THREE.BufferAttribute(dustCol,3));
+const dustMat=nodeMat.clone(); dustMat.uniforms.tex.value=GLOW; dustMat.opacity=0.5;
+const dust=new THREE.Points(dustGeo,dustMat); group.add(dust);
+
+// ---- núcleo C1 ----
+const core=new THREE.Mesh(new THREE.IcosahedronGeometry(0.16,2),
+  new THREE.MeshBasicMaterial({color:0xffffff,transparent:true}));
+group.add(core);
+const coreGlow=new THREE.Sprite(new THREE.SpriteMaterial({map:GLOW,color:0x66e0ff,transparent:true,blending:THREE.AdditiveBlending,depthWrite:false}));
+coreGlow.scale.set(1.6,1.6,1.6); group.add(coreGlow);
+
+// ---- post: bloom ----
+const composer=new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene,camera));
+const bloom=new UnrealBloomPass(new THREE.Vector2(innerWidth,innerHeight),1.1,0.7,0.0);
+composer.addPass(bloom);
+
+// ---- mouse parallax ----
+let mx=0,my=0; addEventListener('pointermove',e=>{mx=(e.clientX/innerWidth-0.5);my=(e.clientY/innerHeight-0.5);});
+addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth,innerHeight);composer.setSize(innerWidth,innerHeight);bloom.resolution.set(innerWidth,innerHeight);});
+
+// ---- loop ----
+const clock=new THREE.Clock();
+const bgCol=new THREE.Color();   // reusado por frame para teñir fondo/niebla
+function audioLevel(t,energy){let v=0.3+0.28*Math.sin(t*4)+0.18*Math.sin(t*11+1)+0.12*Math.sin(t*23+2);return Math.max(0.04,Math.min(1,v))*energy;}
+let looping=true;
+function frame(){
+  if(document.hidden){ looping=false; return; }   // pausa render con pestaña oculta (ahorra batería)
+  const t=clock.getElapsedTime(), dt=1/60;
+  if(transTimer>0){transTimer-=dt; if(transTimer<=0)setState('idle');}
+  // lerp color/energía/velocidad de estado (suave, sin saltos)
+  for(let k=0;k<3;k++) cur.col[k]+=(target.col[k]-cur.col[k])*0.08;
+  cur.E+=(target.energy-cur.E)*0.06; cur.S+=(target.speed-cur.S)*0.06;
+  const [cr,cg,cb]=cur.col;
+  // nivel: audio REAL (mic/TTS) en grabando/hablando; simulado en el resto
+  extLvlS+=(extLvl-extLvlS)*0.5;
+  const realAudio=(performance.now()-lastLvl<300)&&(mode==='speak'||mode==='rec');
+  const lvl=realAudio?Math.max(0.04,Math.min(1,extLvlS)):audioLevel(t,cur.E);
+
+  // pesos de comportamiento por estado (entran/salen suave -> sin saltos)
+  wScreen+=(((mode==='screen')?1:0)-wScreen)*0.06;
+  wRec+=(((mode==='rec')?1:0)-wRec)*0.06;
+  wSpeak+=(((mode==='speak')?1:0)-wSpeak)*0.06;
+  appear+=(appearTarget-appear)*((mode==='cancel')?0.16:0.1);
+  flashV*=0.92; wobbleV*=0.88;
+  const ap=Math.max(0,Math.min(1,appear));
+  const implode=(mode==='cancel')?(1-ap):0;
+  const exPhase=0.5+0.5*Math.sin(t*1.15);                    // ciclo expandir/contraer (mirando pantalla)
+  // modificadores de radio de la red por estado
+  const voice=1+lvl*0.18*wSpeak;                             // hablando: toda la red late con la voz
+  const recExpand=1+(0.07+lvl*0.05+0.02*Math.sin(t*1.0))*wRec; // grabando: red mas expandida + late con el mic
+  const expand=1+0.20*exPhase*wScreen;                       // mirando pantalla: se agranda y se contrae
+  const scanGlow=exPhase*0.22*wScreen;                       // glow extra durante el escaneo
+
+  // posiciones nodos (respiración) + colores
+  const seed=Math.floor(t/1.4), prog=(t%1.4)/1.4, pulse=Math.sin(prog*Math.PI);
+  const foci=[(seed*17)%N,(seed*41+7)%N,(seed*29+19)%N];
+  const fset=new Set(foci);
+  const macro=voice*recExpand*expand*(1-implode*0.85)*(0.25+0.75*ap);
+  for(let i=0;i<N;i++){const br=(1+0.04*Math.sin(t*1.6+i*0.7)+lvl*0.05)*macro;
+    nodePos[i*3]=dir[i][0]*R*br; nodePos[i*3+1]=dir[i][1]*R*br; nodePos[i*3+2]=dir[i][2]*R*br;
+    if(fset.has(i)){const b=0.6+0.4*pulse, T=0.6;  // foco brillante teñido hacia el color del estado
+      nodeCol[i*3]=Math.min(1,b*((1-T)+T*cr)+scanGlow); nodeCol[i*3+1]=Math.min(1,b*((1-T)+T*cg)+scanGlow); nodeCol[i*3+2]=Math.min(1,b*((1-T)+T*cb)+scanGlow); nodeSize[i]=0.5+0.5*pulse+lvl*0.3*wSpeak;}
+    else { const d=0.45+0.55*((dir[i][1]+1)/2); nodeCol[i*3]=Math.min(1,cr*d+scanGlow); nodeCol[i*3+1]=Math.min(1,cg*d+scanGlow); nodeCol[i*3+2]=Math.min(1,cb*d+scanGlow); nodeSize[i]=0.22+scanGlow*0.5; }
+  }
+  nodeGeo.attributes.position.needsUpdate=true; nodeGeo.attributes.color.needsUpdate=true; nodeGeo.attributes.size.needsUpdate=true;
+
+  // plexus
+  let pi=0; for(const [a,b] of edges){
+    for(const idx of [a,b]){ plexPos[pi*3]=nodePos[idx*3];plexPos[pi*3+1]=nodePos[idx*3+1];plexPos[pi*3+2]=nodePos[idx*3+2];
+      const f=0.18; plexCol[pi*3]=cr*f;plexCol[pi*3+1]=cg*f;plexCol[pi*3+2]=cb*f; pi++; } }
+  plexGeo.attributes.position.needsUpdate=true; plexGeo.attributes.color.needsUpdate=true;
+
+  // atención
+  let s=0; const activePairs=[];
+  const audGain=Math.max(0.2,1-0.5*wSpeak+1.3*wSpeak*lvl);   // conexiones laten con la voz de Claude
+  for(const f of foci){ for(const n of attNb[f]){ if(s>=MAXATT)break;
+    const bri=(0.15+0.85*pulse)*ap*audGain; const o=s*6;
+    attPos[o]=nodePos[f*3];attPos[o+1]=nodePos[f*3+1];attPos[o+2]=nodePos[f*3+2];
+    attPos[o+3]=nodePos[n*3];attPos[o+4]=nodePos[n*3+1];attPos[o+5]=nodePos[n*3+2];
+    attCol[o]=bri;attCol[o+1]=bri;attCol[o+2]=bri;
+    attCol[o+3]=cr*bri;attCol[o+4]=cg*bri;attCol[o+5]=cb*bri;
+    activePairs.push([f,n]); s++; }}
+  att.geometry.setDrawRange(0,s*2);
+  attGeo.attributes.position.needsUpdate=true; attGeo.attributes.color.needsUpdate=true;
+
+  // motas viajando por pares activos
+  for(let m=0;m<MOTES;m++){const st=moteState[m];
+    if(!activePairs.length){moteSize[m]=0;continue;}
+    if(st.t>=1||(st.a===0&&st.b===0)){const pr=activePairs[(m*7+seed)%activePairs.length];st.a=pr[0];st.b=pr[1];st.t=0;}
+    st.t+=st.sp*0.016*(0.5+lvl);
+    const tt=Math.min(1,st.t),a=st.a,b=st.b;
+    motePos[m*3]=nodePos[a*3]+(nodePos[b*3]-nodePos[a*3])*tt;
+    motePos[m*3+1]=nodePos[a*3+1]+(nodePos[b*3+1]-nodePos[a*3+1])*tt;
+    motePos[m*3+2]=nodePos[a*3+2]+(nodePos[b*3+2]-nodePos[a*3+2])*tt;
+    const fade=Math.sin(tt*Math.PI);
+    moteCol[m*3]=fade;moteCol[m*3+1]=fade;moteCol[m*3+2]=fade;
+    moteSize[m]=0.16*fade*(0.6+pulse);
+  }
+  moteGeo.attributes.position.needsUpdate=true;moteGeo.attributes.color.needsUpdate=true;moteGeo.attributes.size.needsUpdate=true;
+
+  // dust color
+  for(let i=0;i<DUST;i++){dustCol[i*3]=cr*0.6;dustCol[i*3+1]=cg*0.6;dustCol[i*3+2]=cb*0.6;}
+  dustGeo.attributes.color.needsUpdate=true;
+
+  // núcleo (colapsa en cancel, aparece con ap) — pintado con el color del estado
+  const cs=(1+lvl*0.5+pulse*0.12)*(0.25+0.75*ap)*(1-implode);
+  core.scale.setScalar(Math.max(0.001,cs)); core.material.opacity=ap;
+  core.material.color.setRGB(0.45+0.55*cr,0.45+0.55*cg,0.45+0.55*cb);   // blanco-cálido teñido al estado
+  coreGlow.material.color.setRGB(Math.min(1,cr*0.85+0.1),Math.min(1,cg*0.85+0.1),Math.min(1,cb*0.85+0.1));  // halo con el tono del estado
+  coreGlow.scale.setScalar((1.4+lvl*1.1)*(0.4+0.6*ap)); coreGlow.material.opacity=ap;
+
+  // bloom reactivo (+ destello en sesión nueva)
+  bloom.strength=0.85+lvl*0.9+flashV*0.9;
+
+  // fondo + niebla teñidos sutilmente hacia el color del estado
+  // OJO: setRGB en sRGB (sin esto, gamma sube el valor y el bloom revienta a blanco)
+  const bgK=1-implode;   // cancel: fondo se funde a NEGRO mientras la orbe colapsa
+  // base azul oscura tipo A1 (#04070b) + tinte sutil del estado. El acople de color
+  // fuerte llega por el BLOOM de los nodos (como A1), no por reventar el clearColor.
+  bgCol.setRGB((cr*0.022+0.013)*bgK, (cg*0.022+0.024)*bgK, (cb*0.022+0.042)*bgK, THREE.SRGBColorSpace);
+  renderer.setClearColor(bgCol,1);   // niebla queda fija azul A1 (no la tiño -> evita el viraje verde)
+
+  // animación global
+  group.rotation.y+=0.0016+cur.S*0.004;
+  group.rotation.x=0.18 - my*0.5;
+  group.position.x=(Math.random()-0.5)*wobbleV*0.4;          // sacudida en error
+  const breath=1+wSpeak*(lvl*0.06)+(1-wSpeak)*(0.02*Math.sin(t*1.9));  // hablando: respira con la voz
+  group.scale.setScalar(breath);
+  camera.position.x=mx*1.3; camera.position.y=-my*1.0; camera.lookAt(0,0,0);
+  dust.rotation.y-=0.0006;
+
+  composer.render();
+  requestAnimationFrame(frame);
+}
+document.addEventListener('visibilitychange',()=>{ if(!looping && !document.hidden){ looping=true; requestAnimationFrame(frame); } });
+frame();
+}catch(e){console.error(e);document.getElementById('fallback').style.display='flex';}
+</script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+# entorno Python (pesado, reproducible vía requirements.txt)
+.venv/
+__pycache__/
+*.pyc
+
+# estado runtime / logs
+voice_claude.log
+session.json
+*.wav
+
+# scratch de tooling (brainstorms, etc)
+.superpowers/
+
+# temporales del sistema
+/tmp/
