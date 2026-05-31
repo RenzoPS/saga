@@ -16,7 +16,7 @@ EDGE_VOICE = "es-AR-ElenaNeural"  # Microsoft Edge TTS, voz argentina femenina
 EDGE_RATE = "+5%"  # ligeramente mas rapida
 EDGE_PITCH = "+0Hz"
 
-WHISPER_SIZE = os.environ.get("VOICE_WHISPER_SIZE", "base")  # base: ~2x más rápido que small en CPU (algo menos preciso). tiny/base/small/medium...
+WHISPER_SIZE = os.environ.get("VOICE_WHISPER_SIZE", "small")  # small: preciso (para voz, entender bien > 2s). base = más rápido/menos preciso
 WHISPER_BEAM = int(os.environ.get("VOICE_WHISPER_BEAM", "5"))  # beam5 con base: costo ~nulo (medido) + búsqueda robusta. beam1 dispara loops
 # Daemon STT: mantiene el modelo caliente en RAM entre invocaciones (mata los ~3s
 # de recarga por Win+Z). transcribe() es cliente; si el daemon esta caido cae a inline.
@@ -36,7 +36,7 @@ WHISPER_DECODE = dict(
     no_repeat_ngram_size=3,
 )
 
-CLAUDE_MODEL = "haiku"
+CLAUDE_MODEL = os.environ.get("VOICE_CLAUDE_MODEL", "sonnet")  # sonnet: respuestas mucho mejores (haiku flojo). Más lento/caro. env -> "haiku" para volver
 # Saltar permisos de Claude (modo dios). Default ON para no romper el flujo actual;
 # exportá VOICE_CLAUDE_SAFE=1 para correr en modo seguro (Claude pide permisos).
 CLAUDE_SKIP_PERMISSIONS = os.environ.get("VOICE_CLAUDE_SAFE") != "1"
