@@ -183,7 +183,15 @@ addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updat
 // ---- loop ----
 const clock=new THREE.Clock();
 const bgCol=new THREE.Color();   // reusado por frame para teñir fondo/niebla
-function audioLevel(t,energy){let v=0.3+0.28*Math.sin(t*4)+0.18*Math.sin(t*11+1)+0.12*Math.sin(t*23+2);return Math.max(0.04,Math.min(1,v))*energy;}
+// envelope stylized con variación orgánica: fases aleatorias por sesión (cada vez se ve
+// distinto) + drift de amplitud con senoide lenta (varía dentro del habla, 100% suave, sin jitter).
+const _ph=[Math.random()*6.28,Math.random()*6.28,Math.random()*6.28,Math.random()*6.28];
+function audioLevel(t,energy){
+  let v=0.3+0.26*Math.sin(t*4+_ph[0])+0.16*Math.sin(t*11+_ph[1])
+        +0.12*Math.sin(t*23+_ph[2])+0.10*Math.sin(t*1.7+_ph[3]);  // término lento = ritmo de frases
+  v*=(0.75+0.35*Math.sin(t*0.43+_ph[0]*2));   // amplitud que va y viene (lento -> orgánico)
+  return Math.max(0.04,Math.min(1,v))*energy;
+}
 let looping=true;
 function frame(){
   if(document.hidden){ looping=false; return; }   // pausa render con pestaña oculta (ahorra batería)
