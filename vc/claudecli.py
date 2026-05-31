@@ -1,9 +1,13 @@
-"""Invocación al CLI de Claude: spawnea `claude` en modo stream-json y emite
-los text_delta. Maneja sesión (--resume/--session-id con fallback) e imagen."""
+"""Invocación a Claude. Camino rápido: daemon persistente (proceso `claude`
+caliente, sin cold-start). Fallback robusto: spawn one-shot `claude -p` (lo de
+siempre) si el daemon no está o falla. Maneja sesión e imagen."""
 
+import os
+import sys
 import base64
 import json
 import time
+import socket
 import subprocess
 from pathlib import Path
 from typing import Callable, Iterator
@@ -13,109 +17,163 @@ from .config import (
     CLAUDE_FAST_FLAGS,
     CLAUDE_SKIP_PERMISSIONS,
     CLAUDE_TIMEOUT_S,
+    CLAUDE_SYSTEM_PROMPT,
+    CLAUDE_SOCK,
+    CLAUDE_DAEMON,
 )
 from .runtime import log, _cancel, set_current_proc
-from .session import get_active_session_id, touch_session
+from .session import get_active_session_id, touch_session, reset_session
 
 
-def ask_claude_stream(
+# ───────────────────────── daemon (camino rápido) ─────────────────────────
+def _claude_daemon_up() -> bool:
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(0.3)
+        s.connect(str(CLAUDE_SOCK))
+        s.close()
+        return True
+    except OSError:
+        return False
+
+
+def prewarm_claude() -> None:
+    """Spawnea el daemon de Claude si no corre. NO bloquea: el proceso `claude`
+    carga plugins/sesión en paralelo mientras grabás/transcribís -> sin cold-start."""
+    if _claude_daemon_up():
+        return
+    try:
+        subprocess.Popen(
+            [sys.executable, str(CLAUDE_DAEMON)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True, env={**os.environ},
+        )
+        log("claude daemon spawned (prewarm)")
+    except OSError as e:
+        log(f"claude daemon spawn fail: {e}")
+
+
+def reset_claude() -> None:
+    """Resetea la sesión. Si el daemon está vivo, le pide reset (nueva sesión +
+    respawn). Si no, resetea el archivo local (el próximo spawn la toma)."""
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(10.0)
+        s.connect(str(CLAUDE_SOCK))
+        s.sendall(b'{"reset": true}\n')
+        s.recv(256)
+        s.close()
+        log("claude daemon reset")
+    except OSError:
+        reset_session()
+
+
+def _ask_via_daemon(prompt: str, on_first_token) -> "Iterator[str]":
+    """Cliente del daemon. Yieldea text_deltas. Devuelve (via return) True si el
+    daemon manejó el turno, False si hay que caer al fallback one-shot."""
+    try:
+        conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        conn.settimeout(3.0)
+        conn.connect(str(CLAUDE_SOCK))
+    except OSError:
+        return False
+    try:
+        conn.sendall((json.dumps({"prompt": prompt}) + "\n").encode())
+        conn.settimeout(1.0)   # recv corto -> permite chequear _cancel entre chunks
+        buf = b""
+        first = False
+        any_delta = False
+        deadline = time.time() + CLAUDE_TIMEOUT_S
+        while True:
+            if _cancel.is_set():
+                return True   # cancelado: el daemon drena solo; turno "manejado"
+            if time.time() > deadline:
+                log("daemon claude timeout")
+                return any_delta
+            try:
+                chunk = conn.recv(4096)
+            except socket.timeout:
+                continue
+            if not chunk:
+                return any_delta   # socket cerrado: si ya habló -> ok; si no -> fallback
+            buf += chunk
+            while b"\n" in buf:
+                raw, buf = buf.split(b"\n", 1)
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    o = json.loads(raw.decode())
+                except ValueError:
+                    continue
+                if "delta" in o:
+                    if not first:
+                        if on_first_token:
+                            try:
+                                on_first_token()
+                            except Exception:
+                                pass
+                        first = True
+                    any_delta = True
+                    yield o["delta"]
+                elif o.get("done"):
+                    touch_session()
+                    log("claude daemon turn OK")
+                    return True
+                elif "error" in o:
+                    log(f"claude daemon error: {o['error']}")
+                    return any_delta   # sin deltas -> False -> fallback one-shot
+    finally:
+        try:
+            conn.close()
+        except OSError:
+            pass
+
+
+# ───────────────────────── one-shot (fallback) ─────────────────────────
+def _ask_oneshot(
     prompt: str,
-    on_first_token: "Callable[[], None] | None" = None,
-    screenshot_path: "Path | None" = None,
+    on_first_token: "Callable[[], None] | None",
+    screenshot_path: "Path | None",
 ) -> Iterator[str]:
-    """Stream text_delta events de Claude CLI. Maneja --resume/--session-id fallback.
-    Si screenshot_path es dado, manda imagen + texto via --input-format stream-json."""
+    """Spawn `claude -p` de un solo turno (lo que anduvo siempre). Maneja imagen
+    y el fallback --resume/--session-id. Es el camino seguro si el daemon falla."""
     has_image = screenshot_path is not None and screenshot_path.exists()
-    log(f"claude prompt{' [+img]' if has_image else ''}: {prompt!r}")
-    system = (
-        "Estas hablando, no escribiendo. Tu respuesta sale por parlante (TTS multilingue "
-        "que pronuncia bien anglicismos, numeros, simbolos y siglas; no te preocupes por fonetizar). "
-        "\n\n"
-        "Reglas firmes:\n"
-        "- Texto plano. Nada de markdown: sin asteriscos, sin backticks, sin listas con guiones o numeros, sin headers.\n"
-        "- Espanol rioplatense: vos, dale, che, fijate.\n"
-        "- Largo proporcional: pregunta corta = respuesta corta. Tono conversacional, directo, sin floreos.\n"
-        "- Si no podes responder por falta de datos o tools, una sola frase corta. No listes alternativas ni te disculpes.\n"
-        "\n"
-        "Estilo:\n"
-        "Hablas como si le contaras algo a un amigo en un cafe. Nada de 'primero, segundo, tercero', "
-        "'aspectos clave', 'puntos importantes', 'cabe destacar'. Frases fluidas, conectadas. "
-        "Conectores naturales: 'asi que', 'entonces', 'igual', 'mira', 'fijate'. "
-        "Si explicas algo tecnico, lo contas como historia, no como manual."
-    )
     session_id, is_new = get_active_session_id()
     first_flag = "--session-id" if is_new else "--resume"
     second_flag = "--resume" if is_new else "--session-id"
 
-    # Si hay imagen, pre-armo el JSON multimodal para stdin.
     stdin_payload: "str | None" = None
     if has_image:
-        assert screenshot_path is not None
         try:
-            img_bytes = screenshot_path.read_bytes()
-            img_b64 = base64.b64encode(img_bytes).decode("ascii")
-            stdin_payload = (
-                json.dumps(
-                    {
-                        "type": "user",
-                        "message": {
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "image",
-                                    "source": {
-                                        "type": "base64",
-                                        "media_type": "image/png",
-                                        "data": img_b64,
-                                    },
-                                },
-                                {"type": "text", "text": prompt},
-                            ],
-                        },
-                    }
-                )
-                + "\n"
-            )
+            img_b64 = base64.b64encode(screenshot_path.read_bytes()).decode("ascii")
+            stdin_payload = json.dumps({
+                "type": "user",
+                "message": {"role": "user", "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": img_b64}},
+                    {"type": "text", "text": prompt},
+                ]},
+            }) + "\n"
         except Exception as e:
-            log(f"image encode EXC: {type(e).__name__}: {e}, falling back to text-only")
+            log(f"image encode EXC: {type(e).__name__}: {e}, text-only")
             has_image = False
-            stdin_payload = None
 
     def _spawn(flag: str) -> subprocess.Popen:
         args = [
-            "claude",
-            "--model",
-            CLAUDE_MODEL,
-            "--output-format",
-            "stream-json",
-            "--verbose",
-            "--include-partial-messages",
-            "--append-system-prompt",
-            system,
-            flag,
-            session_id,
+            "claude", "--model", CLAUDE_MODEL,
+            "--output-format", "stream-json", "--verbose", "--include-partial-messages",
+            "--append-system-prompt", CLAUDE_SYSTEM_PROMPT, flag, session_id,
         ]
         args.extend(CLAUDE_FAST_FLAGS)
         if CLAUDE_SKIP_PERMISSIONS:
             args.append("--dangerously-skip-permissions")
         if has_image:
             args.extend(["-p", "--input-format", "stream-json"])
-            return subprocess.Popen(
-                args,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1,
-            )
+            return subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, text=True, bufsize=1)
         args.extend(["-p", prompt])
-        return subprocess.Popen(
-            args,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-        )
+        return subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, bufsize=1)
 
     for attempt, flag in enumerate((first_flag, second_flag)):
         try:
@@ -128,7 +186,6 @@ def ask_claude_stream(
             return
 
         set_current_proc(proc)
-        # Si hay stdin payload (modo imagen), escribirlo y cerrar stdin.
         if stdin_payload is not None and proc.stdin is not None:
             try:
                 proc.stdin.write(stdin_payload)
@@ -172,7 +229,6 @@ def ask_claude_stream(
                                 pass
                         text_received = True
                     yield text
-
             try:
                 proc.wait(timeout=3)
             except subprocess.TimeoutExpired:
@@ -196,18 +252,34 @@ def ask_claude_stream(
 
         if proc.returncode == 0 and text_received:
             touch_session()
-            log("claude stream done OK")
+            log("claude stream done OK (one-shot)")
             return
 
-        log(f"claude stream err rc={proc.returncode} flag={flag} stderr={err[:400]} text_received={text_received}")
+        log(f"claude one-shot err rc={proc.returncode} flag={flag} stderr={err[:300]} text={text_received}")
         low = err.lower()
-        retryable = (
-            "no conversation found" in low
-            or "not found" in low
-            or "does not exist" in low
-            or "already in use" in low
-        )
+        retryable = ("no conversation found" in low or "not found" in low
+                     or "does not exist" in low or "already in use" in low)
         if attempt == 0 and retryable:
-            log(f"retry stream with {second_flag}")
+            log(f"retry one-shot with {second_flag}")
             continue
         return
+
+
+# ───────────────────────── dispatcher ─────────────────────────
+def ask_claude_stream(
+    prompt: str,
+    on_first_token: "Callable[[], None] | None" = None,
+    screenshot_path: "Path | None" = None,
+) -> Iterator[str]:
+    """Stream de text_deltas de Claude. Daemon caliente primero; si no, one-shot.
+    Las imágenes van directo al one-shot (más simple/probado para multimodal)."""
+    has_image = screenshot_path is not None and screenshot_path.exists()
+    log(f"claude prompt{' [+img]' if has_image else ''}: {prompt!r}")
+
+    if not has_image:
+        handled = yield from _ask_via_daemon(prompt, on_first_token)
+        if handled:
+            return
+        log("daemon claude no disponible -> fallback one-shot")
+
+    yield from _ask_oneshot(prompt, on_first_token, screenshot_path)

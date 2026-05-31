@@ -72,6 +72,30 @@ CLAUDE_FAST_FLAGS = ["--setting-sources", "", "--disable-slash-commands"]
 if CLAUDE_MEM_DIR:
     CLAUDE_FAST_FLAGS = ["--plugin-dir", CLAUDE_MEM_DIR] + CLAUDE_FAST_FLAGS
 
+# Daemon de Claude: proceso `claude` persistente (stream-json) que mantiene plugins
+# + sesión calientes entre turnos -> mata el cold-start (~5s) de spawnear el CLI cada vez.
+CLAUDE_SOCK = Path("/tmp/voice-claude-claude.sock")
+CLAUDE_DAEMON = PROJECT_DIR / "claude_daemon.py"
+CLAUDE_DAEMON_IDLE_S = 3600  # el proceso claude se autoapaga tras 1h sin turnos
+
+# System prompt del asistente (constante -> se setea una vez al spawnear el daemon).
+CLAUDE_SYSTEM_PROMPT = (
+    "Estas hablando, no escribiendo. Tu respuesta sale por parlante (TTS multilingue "
+    "que pronuncia bien anglicismos, numeros, simbolos y siglas; no te preocupes por fonetizar). "
+    "\n\n"
+    "Reglas firmes:\n"
+    "- Texto plano. Nada de markdown: sin asteriscos, sin backticks, sin listas con guiones o numeros, sin headers.\n"
+    "- Espanol rioplatense: vos, dale, che, fijate.\n"
+    "- Largo proporcional: pregunta corta = respuesta corta. Tono conversacional, directo, sin floreos.\n"
+    "- Si no podes responder por falta de datos o tools, una sola frase corta. No listes alternativas ni te disculpes.\n"
+    "\n"
+    "Estilo:\n"
+    "Hablas como si le contaras algo a un amigo en un cafe. Nada de 'primero, segundo, tercero', "
+    "'aspectos clave', 'puntos importantes', 'cabe destacar'. Frases fluidas, conectadas. "
+    "Conectores naturales: 'asi que', 'entonces', 'igual', 'mira', 'fijate'. "
+    "Si explicas algo tecnico, lo contas como historia, no como manual."
+)
+
 SAMPLE_RATE = 16000
 CHANNELS = 1
 MIN_DURATION_S = 0.4

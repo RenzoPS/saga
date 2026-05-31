@@ -21,9 +21,9 @@ from .orb import ensure_orb, orb_state
 from .desktop import ensure_monitor_open, take_screenshot
 from .audio import record_until_signaled
 from .stt import prewarm_whisper, transcribe
-from .session import reset_session, is_reset_command, is_visual_command
+from .session import is_reset_command, is_visual_command
 from .tts import TTSStreamer, load_word_aliases, stream_to_sentences
-from .claudecli import ask_claude_stream
+from .claudecli import ask_claude_stream, prewarm_claude, reset_claude
 
 
 def stop_path() -> int:
@@ -77,7 +77,8 @@ def abort_path() -> int:
 def start_path() -> int:
     ensure_orb()
     ensure_monitor_open()
-    prewarm_whisper()  # modelo carga en paralelo mientras el usuario graba
+    prewarm_whisper()  # modelo Whisper carga en paralelo mientras el usuario graba
+    prewarm_claude()   # daemon Claude calienta plugins/sesión en paralelo (sin cold-start)
     LOCK_FILE.write_text(str(os.getpid()))
     ABORT_FILE.unlink(missing_ok=True)   # owner nuevo -> resetear tracker de zombie
     signal.signal(signal.SIGUSR2, cancel_handler)
@@ -110,8 +111,8 @@ def start_path() -> int:
             return 0
 
         if is_reset_command(text):
-            new_sid = reset_session()
-            log(f"reset by voice keyword -> {new_sid}")
+            reset_claude()   # resetea sesión + respawnea el daemon (o resetea el archivo si no hay daemon)
+            log("reset by voice keyword")
             orb_state("nueva")
             return 0
 
