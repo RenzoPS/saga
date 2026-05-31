@@ -16,6 +16,7 @@ import sys
 import json
 import time
 import socket
+import select
 import signal
 import subprocess
 from pathlib import Path
@@ -23,7 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from vc.config import (
     CLAUDE_SOCK, CLAUDE_MODEL, CLAUDE_FAST_FLAGS, CLAUDE_SKIP_PERMISSIONS,
-    CLAUDE_SYSTEM_PROMPT, CLAUDE_DAEMON_IDLE_S, LOG_FILE,
+    CLAUDE_SYSTEM_PROMPT, CLAUDE_DAEMON_IDLE_S, CLAUDE_DAEMON_TURN_TIMEOUT_S, LOG_FILE,
 )
 from vc.session import get_active_session_id, reset_session
 
@@ -134,7 +135,16 @@ class ClaudeProc:
             return "dead"
 
         client_gone = False
+        deadline = time.monotonic() + CLAUDE_DAEMON_TURN_TIMEOUT_S
         while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:          # turno colgado -> matar para no trabar el daemon
+                log(f"turno excedió {CLAUDE_DAEMON_TURN_TIMEOUT_S:.0f}s -> mato claude (respawn en el próximo)")
+                self.kill()
+                return "dead"
+            ready, _, _ = select.select([self.p.stdout], [], [], min(remaining, 1.0))
+            if not ready:               # nada todavía -> re-chequear deadline
+                continue
             line = self.p.stdout.readline()
             if not line:               # claude murió / EOF
                 return "dead"
@@ -182,6 +192,7 @@ def main() -> int:
 
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     srv.bind(str(SOCK_PATH))
+    os.chmod(SOCK_PATH, 0o600)   # solo el dueño puede conectar (sin esto = RCE local con god-mode)
     srv.listen(4)
     srv.settimeout(CLAUDE_DAEMON_IDLE_S)
     log(f"escuchando en {SOCK_PATH} (idle {CLAUDE_DAEMON_IDLE_S:.0f}s)")

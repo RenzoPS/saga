@@ -77,6 +77,7 @@ def main() -> int:
 
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     srv.bind(str(SOCK_PATH))
+    os.chmod(SOCK_PATH, 0o600)   # solo el dueño puede conectar (sin esto, cualquier user local entra)
     srv.listen(4)
     srv.settimeout(IDLE_TIMEOUT_S)
     log(f"escuchando en {SOCK_PATH} (idle {IDLE_TIMEOUT_S:.0f}s)")

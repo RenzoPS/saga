@@ -77,6 +77,7 @@ if CLAUDE_MEM_DIR:
 CLAUDE_SOCK = Path("/tmp/voice-claude-claude.sock")
 CLAUDE_DAEMON = PROJECT_DIR / "claude_daemon.py"
 CLAUDE_DAEMON_IDLE_S = 3600  # el proceso claude se autoapaga tras 1h sin turnos
+CLAUDE_DAEMON_TURN_TIMEOUT_S = 180  # techo por turno: si claude se cuelga, matar+respawn (no trabar el daemon)
 
 # System prompt del asistente (constante -> se setea una vez al spawnear el daemon).
 CLAUDE_SYSTEM_PROMPT = (
