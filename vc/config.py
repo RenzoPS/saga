@@ -17,7 +17,7 @@ EDGE_RATE = "+5%"  # ligeramente mas rapida
 EDGE_PITCH = "+0Hz"
 
 WHISPER_SIZE = os.environ.get("VOICE_WHISPER_SIZE", "base")  # base: ~2x más rápido que small en CPU (algo menos preciso). tiny/base/small/medium...
-WHISPER_BEAM = int(os.environ.get("VOICE_WHISPER_BEAM", "3"))  # 3 = punto medio: más rápido que 5, sin loops (beam1 sí los dispara)
+WHISPER_BEAM = int(os.environ.get("VOICE_WHISPER_BEAM", "5"))  # beam5 con base: costo ~nulo (medido) + búsqueda robusta. beam1 dispara loops
 # Daemon STT: mantiene el modelo caliente en RAM entre invocaciones (mata los ~3s
 # de recarga por Win+Z). transcribe() es cliente; si el daemon esta caido cae a inline.
 WHISPER_SOCK = Path("/tmp/voice-claude-whisper.sock")
