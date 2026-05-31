@@ -2,6 +2,7 @@
 flujo grabar -> transcribir -> Claude -> hablar, con el orbe siguiendo la fase."""
 
 import os
+import sys
 import signal
 from pathlib import Path
 
@@ -170,6 +171,10 @@ def start_path() -> int:
 
 
 def main() -> int:
+    if "--doctor" in sys.argv:
+        from .doctor import doctor
+        return doctor()
+
     PROJECT_DIR.mkdir(parents=True, exist_ok=True)
     load_word_aliases()
 
