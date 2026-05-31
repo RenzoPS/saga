@@ -6,6 +6,7 @@ __pycache__/
 # estado runtime / logs
 voice_claude.log*
 session.json
+.guard-settings.json
 *.wav
 
 # todo lo de Claude (CLAUDE.md + superpowers): local, NO se commitea

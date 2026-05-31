@@ -2,6 +2,7 @@
 
 import os
 import re
+import json
 from pathlib import Path
 
 HOME = Path.home()
@@ -68,7 +69,29 @@ def _detect_claude_mem_dir() -> "str | None":
 
 
 CLAUDE_MEM_DIR = _detect_claude_mem_dir()
+
+# Red de seguridad: hook PreToolUse que bloquea comandos Bash catastróficos antes
+# de ejecutarse (god-mode + voz -> un mishear no puede borrar el disco). Los hooks
+# corren aún con --dangerously-skip-permissions. Se inyecta vía --settings (aditivo,
+# no reactiva las setting-sources). Ver vc/guard.py.
+GUARD_SCRIPT = PROJECT_DIR / "vc" / "guard.py"
+GUARD_SETTINGS = PROJECT_DIR / ".guard-settings.json"
+
+
+def _ensure_guard_settings() -> "str | None":
+    try:
+        GUARD_SETTINGS.write_text(json.dumps({"hooks": {"PreToolUse": [
+            {"matcher": "Bash", "hooks": [
+                {"type": "command", "command": f"python3 {GUARD_SCRIPT}"}]}]}}))
+        return str(GUARD_SETTINGS)
+    except OSError:
+        return None  # degradación: sin guard pero el asistente sigue andando
+
+
+_GUARD = _ensure_guard_settings()
 CLAUDE_FAST_FLAGS = ["--setting-sources", "", "--disable-slash-commands"]
+if _GUARD:
+    CLAUDE_FAST_FLAGS = ["--settings", _GUARD] + CLAUDE_FAST_FLAGS
 if CLAUDE_MEM_DIR:
     CLAUDE_FAST_FLAGS = ["--plugin-dir", CLAUDE_MEM_DIR] + CLAUDE_FAST_FLAGS
 
