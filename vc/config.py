@@ -8,6 +8,7 @@ HOME = Path.home()
 PROJECT_DIR = HOME / ".local/share/voice-claude"
 PID_FILE = Path("/tmp/voice-claude.pid")
 LOCK_FILE = Path("/tmp/voice-claude.lock")
+ABORT_FILE = Path("/tmp/voice-claude.abort")  # pid del último owner abortado (detección de zombie)
 AUDIO_FILE = Path("/tmp/voice-claude.wav")
 OUT_WAV = Path("/tmp/voice-claude-out.wav")
 LOG_FILE = PROJECT_DIR / "voice_claude.log"

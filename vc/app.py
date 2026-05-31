@@ -5,7 +5,7 @@ import os
 import signal
 from pathlib import Path
 
-from .config import LOCK_FILE, PID_FILE, MIN_DURATION_S, PROJECT_DIR
+from .config import LOCK_FILE, PID_FILE, ABORT_FILE, MIN_DURATION_S, PROJECT_DIR
 from .runtime import (
     log,
     _cancel,
@@ -13,6 +13,7 @@ from .runtime import (
     set_current_streamer,
     read_recorder_pid,
     read_owner_pid,
+    pid_alive,
     signal_stop,
     signal_cancel,
 )
@@ -35,13 +36,40 @@ def stop_path() -> int:
     return 0
 
 
+def _read_abort_pid() -> "int | None":
+    try:
+        return int(ABORT_FILE.read_text().strip())
+    except (ValueError, OSError):
+        return None
+
+
 def abort_path() -> int:
     pid = read_owner_pid()
     if pid is None:
         log("abort called but no owner")
         return 1
+
+    # Lock auto-sanable: si a este mismo owner YA lo abortamos y sigue vivo, está
+    # colgado (zombie: ej. carga inline de Whisper, no-cancelable, o sesión muerta).
+    # Lo matamos a la fuerza, limpiamos el lock y tomamos el control (arrancar fresco).
+    if _read_abort_pid() == pid:
+        log(f"owner pid={pid} no murió tras abort -> ZOMBIE, force kill + reclaim")
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        LOCK_FILE.unlink(missing_ok=True)
+        PID_FILE.unlink(missing_ok=True)
+        ABORT_FILE.unlink(missing_ok=True)
+        return start_path()
+
+    # Cancel normal (interrumpir una respuesta en curso). Instantáneo.
     log(f"signaling abort to owner pid={pid}")
     signal_cancel(pid)
+    try:
+        ABORT_FILE.write_text(str(pid))   # recordar a quién abortamos (para detectar zombie)
+    except OSError:
+        pass
     orb_state("cancel")
     return 0
 
@@ -51,6 +79,7 @@ def start_path() -> int:
     ensure_monitor_open()
     prewarm_whisper()  # modelo carga en paralelo mientras el usuario graba
     LOCK_FILE.write_text(str(os.getpid()))
+    ABORT_FILE.unlink(missing_ok=True)   # owner nuevo -> resetear tracker de zombie
     signal.signal(signal.SIGUSR2, cancel_handler)
 
     try:
@@ -101,7 +130,10 @@ def start_path() -> int:
         streamer = TTSStreamer()
         set_current_streamer(streamer)
 
+        spoke = [False]   # ¿Claude produjo algún token? (para detectar fallo/sesión muerta)
+
         def on_first_token() -> None:
+            spoke[0] = True
             orb_state("speak")
 
         try:
@@ -121,6 +153,13 @@ def start_path() -> int:
         if _cancel.is_set():
             log("cancel during streaming")
             orb_state("cancel")
+            return 0
+
+        if not spoke[0]:
+            # Claude no produjo respuesta: binario ausente, sesión cerrada, crash...
+            # Feedback visible en vez de quedar mudo (orbe a 'error' amarillo).
+            log("claude no produjo respuesta -> error")
+            orb_state("error")
             return 0
 
         orb_state("idle")

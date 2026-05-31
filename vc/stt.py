@@ -54,18 +54,22 @@ def prewarm_whisper() -> None:
         log(f"whisper daemon spawn fail: {e}")
 
 
-def _transcribe_via_daemon(timeout_s: float = 90.0) -> "str | None":
+def _transcribe_via_daemon(ready_timeout: float = 10.0, recv_timeout: float = 60.0) -> "str | None":
     """Pide la transcripcion al daemon. Devuelve texto, o None si no se pudo
-    (para caer al fallback inline). Espera hasta timeout_s a que el modelo
-    termine de cargar si recien se spawneo (carga en paralelo a la grabacion)."""
-    deadline = time.monotonic() + timeout_s
+    (para caer al fallback inline).
+
+    Dos timeouts separados (clave): `ready_timeout` acota cuánto esperamos a que el
+    daemon acepte conexión (está cargando o murió) -> si murió, caemos a inline en
+    ~10s, no 90s. `recv_timeout` acota la transcripción en sí (beam=5 tarda ~6-8s),
+    que debe ser largo para no cortar una transcripción legítima."""
+    deadline = time.monotonic() + ready_timeout
     conn = None
     while time.monotonic() < deadline:
         if _cancel.is_set():
             return None
         try:
             conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            conn.settimeout(timeout_s)
+            conn.settimeout(2.0)   # cada intento de conexión es corto
             conn.connect(str(WHISPER_SOCK))
             break
         except OSError:
@@ -74,6 +78,7 @@ def _transcribe_via_daemon(timeout_s: float = 90.0) -> "str | None":
     if conn is None:
         return None
     try:
+        conn.settimeout(recv_timeout)   # la transcripción puede tardar varios segundos
         conn.sendall((json.dumps({"audio": str(AUDIO_FILE), "lang": "es"}) + "\n").encode())
         buf = b""
         while b"\n" not in buf:
