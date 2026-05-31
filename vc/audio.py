@@ -12,7 +12,7 @@ import sounddevice as sd
 
 from .config import SAMPLE_RATE, CHANNELS, AUDIO_FILE, PID_FILE
 from .runtime import log, _cancel
-from .orb import orb_state, orb_level
+from .orb import orb_state
 
 
 def record_until_signaled() -> float:
@@ -30,12 +30,9 @@ def record_until_signaled() -> float:
     log("rec start")
 
     buf: "list[np.ndarray]" = []
-    mic_level = [0.0]
 
     def callback(indata, _frames, _t, _status):
         buf.append(indata.copy())
-        a = indata.astype(np.float32) / 32768.0
-        mic_level[0] = min(1.0, float(np.sqrt(np.mean(a * a))) * 5.0) if a.size else 0.0
 
     with sd.InputStream(
         samplerate=SAMPLE_RATE,
@@ -44,8 +41,7 @@ def record_until_signaled() -> float:
         callback=callback,
     ):
         while not stop_event.is_set() and not _cancel.is_set():
-            time.sleep(0.05)
-            orb_level(mic_level[0])   # nivel real del mic -> orbe late con tu voz
+            time.sleep(0.05)   # el orbe anima stylized en 'rec' (no recibe nivel real)
 
     log(f"rec stop. chunks={len(buf)}")
     if not buf:

@@ -10,11 +10,8 @@ import subprocess
 import asyncio
 from typing import Iterator
 
-import numpy as np
-
 from .config import WORD_ALIASES_PATH, EDGE_VOICE, EDGE_RATE, EDGE_PITCH
 from .runtime import log, _cancel
-from .orb import orb_level
 
 
 _WORD_ALIASES: "dict[str, str]" = {}
@@ -107,62 +104,24 @@ class TTSStreamer:
         self._thread.start()
 
     def _ensure_player(self) -> bool:
-        """Cadena: mpg123 (decode->PCM) -> python (mide RMS) -> pacat (reproduce).
-        El nivel sale al ritmo real de reproduccion -> el orbe late SINCRONIZADO.
-        Fallback: mpg123 reproduce directo (sin metering) si la cadena no arranca."""
+        """Reproductor simple: edge-tts -> mpg123 (decodifica y reproduce directo).
+        Sin metering: el orbe anima stylized (no recibe nivel de audio), así no hay
+        desfase posible entre el sonido (este proceso) y el dibujo (el browser)."""
         with self._pipe_lock:
             if self._player is not None and self._player.poll() is None:
                 return True
-            try:
-                dec = subprocess.Popen(
-                    ["mpg123", "-q", "-s", "--mono", "-r", str(self.RATE), "-"],
-                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                )
-                play = subprocess.Popen(
-                    ["pacat", "--format=s16le", f"--rate={self.RATE}",
-                     "--channels=1", "--latency-msec=30"],   # buffer chico -> el nivel no adelanta al sonido
-                    stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                )
-                self._player, self._play, self._run = dec, play, True
-                threading.Thread(target=self._pump, args=(dec.stdout, play), daemon=True).start()
-                log("tts player up (mpg123 -> pacat, metered)")
-                return True
-            except Exception as e:
-                log(f"tts chain spawn EXC: {type(e).__name__}: {e}; fallback mpg123 directo")
             try:
                 self._player = subprocess.Popen(
                     ["mpg123", "-q", "-"],
                     stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 )
-                self._play, self._run = None, False
+                self._play = None
+                self._run = False
+                log("tts player up (mpg123)")
                 return True
             except Exception as e:
                 log(f"mpg123 spawn EXC: {type(e).__name__}: {e}")
                 return False
-
-    def _pump(self, out, play) -> None:
-        """Lee PCM del decoder, mide RMS (-> orbe) y lo manda a pacat. pacat consume
-        a tiempo real -> esta lectura queda paceada a tiempo real -> nivel sincronizado."""
-        try:
-            while self._run:
-                raw = out.read(self.BLK * 2)
-                if not raw:
-                    break
-                a = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-                rms = float(np.sqrt(np.mean(a * a))) if a.size else 0.0
-                orb_level(min(1.0, rms * 4.0))
-                try:
-                    play.stdin.write(raw)
-                except (BrokenPipeError, OSError):
-                    break
-        finally:
-            self._run = False
-            try:
-                if play.stdin:
-                    play.stdin.close()
-            except Exception:
-                pass
-            orb_level(0.0)
 
     def enqueue(self, sentence: str) -> None:
         if sentence.strip():
@@ -201,7 +160,6 @@ class TTSStreamer:
                     p.kill()
             except Exception as e:
                 log(f"tts kill EXC: {type(e).__name__}: {e}")
-        orb_level(0.0)
 
     def _drain_pipeline(self) -> None:
         """Cierra stdin del decoder para EOF; el pump drena el PCM restante a pacat

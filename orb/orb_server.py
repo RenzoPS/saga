@@ -34,7 +34,6 @@ MIME = {".js": "text/javascript", ".css": "text/css",
         ".html": "text/html; charset=utf-8", ".json": "application/json"}
 
 _state = {"name": "idle"}
-_level = {"v": 0.0, "seq": 0}                     # ultimo nivel + version
 _clients: "set[queue.Queue]" = set()
 _lock = threading.Lock()
 _last_activity = time.monotonic()
@@ -63,15 +62,6 @@ def broadcast(name: str) -> None:
             q.put_nowait(name)
         except queue.Full:
             pass
-
-
-def set_level(v: float) -> None:
-    """Nivel: coalescado (ultimo valor gana), no encola -> no desplaza estados."""
-    v = 0.0 if v != v else max(0.0, min(1.0, v))   # clamp + NaN guard
-    with _lock:
-        _level["v"] = v
-        _level["seq"] += 1
-    _touch()
 
 
 def _watchdog() -> None:
@@ -144,32 +134,21 @@ class Handler(BaseHTTPRequestHandler):
         with _lock:
             _clients.add(q)
             cur = _state["name"]
-            lseq = _level["seq"]
         last_ping = time.monotonic()
         try:
             self.wfile.write(f"data: {cur}\n\n".encode())
             self.wfile.flush()
             while True:
-                wrote = False
                 try:
-                    name = q.get(timeout=0.03)        # estado inmediato; nivel a ~33Hz (sync TTS)
+                    name = q.get(timeout=1.0)         # solo estados (poco frecuentes); ping cada 15s
                     self.wfile.write(f"data: {name}\n\n".encode())
-                    wrote = True
-                except queue.Empty:
-                    pass
-                with _lock:
-                    lv, cs = _level["v"], _level["seq"]
-                if cs != lseq:
-                    lseq = cs
-                    self.wfile.write(f"data: lvl:{lv:.3f}\n\n".encode())
-                    wrote = True
-                now = time.monotonic()
-                if now - last_ping > 15:
-                    self.wfile.write(b": ping\n\n")
-                    last_ping = now
-                    wrote = True
-                if wrote:
                     self.wfile.flush()
+                except queue.Empty:
+                    now = time.monotonic()
+                    if now - last_ping > 15:
+                        self.wfile.write(b": ping\n\n")
+                        self.wfile.flush()
+                        last_ping = now
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
         finally:
@@ -187,14 +166,6 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/state":
             name = (parse_qs(parsed.query).get("s") or [None])[0]
             broadcast(normalize_state(name))
-            self._ok204()
-            return
-        if parsed.path == "/level":
-            raw = (parse_qs(parsed.query).get("v") or ["0"])[0]
-            try:
-                set_level(float(raw))
-            except ValueError:
-                set_level(0.0)
             self._ok204()
             return
         self.send_error(404)

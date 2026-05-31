@@ -61,14 +61,12 @@ class _OrbClient:
     - Una sola conexion HTTP keep-alive; los callers nunca bloquean en red.
     """
 
-    LEVEL_HZ = 33.0   # alto para no perder el envelope de las silabas (sync TTS)
-
     def __init__(self) -> None:
         self._q: queue.Queue = queue.Queue(maxsize=64)
         self._lock = threading.Lock()
-        self._level: "float | None" = None
         self._conn: "http.client.HTTPConnection | None" = None
         self._started = False
+        self._post_ok = True   # estado de salud del POST (para loguear solo en transiciones)
 
     def _ensure_thread(self) -> None:
         with self._lock:
@@ -84,11 +82,6 @@ class _OrbClient:
         except queue.Full:
             pass
 
-    def level(self, v: float) -> None:
-        self._ensure_thread()
-        with self._lock:
-            self._level = v
-
     def _post(self, path: str) -> None:
         for attempt in (1, 2):
             try:
@@ -96,32 +89,26 @@ class _OrbClient:
                     self._conn = http.client.HTTPConnection("127.0.0.1", ORB_PORT, timeout=0.5)
                 self._conn.request("POST", path, body=b"")
                 self._conn.getresponse().read()
+                if not self._post_ok:
+                    log("orb reconectado (POST OK de nuevo)")
+                    self._post_ok = True
                 return
-            except Exception:
+            except Exception as e:
                 try:
                     if self._conn:
                         self._conn.close()
                 except Exception:
                     pass
                 self._conn = None  # reconecta en el proximo intento
+                if attempt == 2 and self._post_ok:   # log SOLO en la transicion ok->fail (sin spam)
+                    log(f"orb POST fail ({path.split('?')[0]}): {type(e).__name__} — server caido?")
+                    self._post_ok = False
 
     def _loop(self) -> None:
-        min_dt = 1.0 / self.LEVEL_HZ
-        last_level = 0.0
+        # Solo estados (un puñado por conversación). Sin nivel de audio -> sin flood HTTP.
         while True:
-            try:
-                name = self._q.get(timeout=0.05)
-                self._post(f"/state?s={name}")
-            except queue.Empty:
-                pass
-            now = time.monotonic()
-            if now - last_level >= min_dt:
-                with self._lock:
-                    lv = self._level
-                    self._level = None
-                if lv is not None:
-                    self._post(f"/level?v={lv:.3f}")
-                    last_level = now
+            name = self._q.get()
+            self._post(f"/state?s={name}")
 
 
 _orb = _OrbClient()
@@ -129,7 +116,3 @@ _orb = _OrbClient()
 
 def orb_state(name: str) -> None:
     _orb.state(name)
-
-
-def orb_level(v: float) -> None:
-    _orb.level(v)
