@@ -67,7 +67,8 @@ def clean_for_tts(text: str) -> str:
     text = text.replace("*", "").replace("`", "")
     text = re.sub(r"\n{2,}", ". ", text)
     text = re.sub(r"\s+", " ", text)
-    return text.strip()
+    text = text.strip()
+    return apply_word_aliases(text)   # fonetizaciones del JSON editable (no-op si no hay aliases)
 
 
 _HARD_PUNCT_CHARS = ".!?¿¡…"

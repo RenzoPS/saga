@@ -16,8 +16,8 @@ EDGE_VOICE = "es-AR-ElenaNeural"  # Microsoft Edge TTS, voz argentina femenina
 EDGE_RATE = "+5%"  # ligeramente mas rapida
 EDGE_PITCH = "+0Hz"
 
-WHISPER_SIZE = "small"
-WHISPER_BEAM = 5  # beam search amplio: evita loops de alucinacion (greedy/beam1 los dispara)
+WHISPER_SIZE = os.environ.get("VOICE_WHISPER_SIZE", "small")  # tiny/base/small/medium...
+WHISPER_BEAM = int(os.environ.get("VOICE_WHISPER_BEAM", "5"))  # beam amplio evita loops de alucinacion (greedy/beam1 los dispara)
 # Daemon STT: mantiene el modelo caliente en RAM entre invocaciones (mata los ~3s
 # de recarga por Win+Z). transcribe() es cliente; si el daemon esta caido cae a inline.
 WHISPER_SOCK = Path("/tmp/voice-claude-whisper.sock")
@@ -34,13 +34,31 @@ CLAUDE_SKIP_PERMISSIONS = os.environ.get("VOICE_CLAUDE_SAFE") != "1"
 #  - MCP servers pesados (playwright lanzaba un Chromium, npx bajaba paquetes, Google MCPs timeouteaban)
 #  - resto de plugins/hooks/skills (caveman, superpowers, context-mode) via --setting-sources ''
 # Mantiene claude-mem COMPLETO (recall + captura + hooks + su MCP) via --plugin-dir.
-# OJO: si claude-mem se actualiza, cambiar el numero de version del path.
-CLAUDE_MEM_DIR = "/home/renzo/.claude/plugins/cache/thedotmack/claude-mem/13.4.0"
-CLAUDE_FAST_FLAGS = [
-    "--plugin-dir", CLAUDE_MEM_DIR,
-    "--setting-sources", "",
-    "--disable-slash-commands",
-]
+_CLAUDE_MEM_BASE = HOME / ".claude/plugins/cache/thedotmack/claude-mem"
+
+
+def _detect_claude_mem_dir() -> "str | None":
+    """Autodetecta el dir de la version MAS NUEVA de claude-mem (evita hardcodear
+    el numero de version, que se rompe en cada update). Override con env."""
+    override = os.environ.get("VOICE_CLAUDE_MEM_DIR")
+    if override:
+        return override
+    if not _CLAUDE_MEM_BASE.is_dir():
+        return None
+    versions = [p for p in _CLAUDE_MEM_BASE.iterdir() if p.is_dir() and p.name[:1].isdigit()]
+    if not versions:
+        return None
+
+    def _semver(p: Path) -> tuple:
+        return tuple(int(x) for x in re.findall(r"\d+", p.name)[:3])
+
+    return str(sorted(versions, key=_semver)[-1])
+
+
+CLAUDE_MEM_DIR = _detect_claude_mem_dir()
+CLAUDE_FAST_FLAGS = ["--setting-sources", "", "--disable-slash-commands"]
+if CLAUDE_MEM_DIR:
+    CLAUDE_FAST_FLAGS = ["--plugin-dir", CLAUDE_MEM_DIR] + CLAUDE_FAST_FLAGS
 
 SAMPLE_RATE = 16000
 CHANNELS = 1
