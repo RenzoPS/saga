@@ -45,7 +45,7 @@ const PH={
   think:    {col:[0.73,0.53,0.97], speed:0.22, energy:0.70, glyph:'✦  Pensando'},
   speak:    {col:[0.30,0.92,0.70], speed:0.28, energy:1.00, glyph:'♪  Hablando'},
   nueva:    {col:[0.33,1.00,0.60], speed:0.40, energy:0.90, glyph:'↻  Sesión nueva'},
-  error:    {col:[1.00,0.73,0.33], speed:0.20, energy:0.50, glyph:'◌  No te entendí'},
+  error:    {col:[1.00,0.86,0.26], speed:0.20, energy:0.50, glyph:'◌  No te entendí'},
   cancel:   {col:[1.00,0.33,0.47], speed:0.10, energy:0.40, glyph:'✕  Cancelado'}
 };
 const TRANSIENT={nueva:1.8,error:1.8,cancel:1.1};
@@ -290,7 +290,11 @@ function frame(){
   const bgK=1-implode;   // cancel: fondo se funde a NEGRO mientras la orbe colapsa
   // base azul oscura tipo A1 (#04070b) + tinte sutil del estado. El acople de color
   // fuerte llega por el BLOOM de los nodos (como A1), no por reventar el clearColor.
-  bgCol.setRGB((cr*0.022+0.013)*bgK, (cg*0.022+0.024)*bgK, (cb*0.022+0.042)*bgK, THREE.SRGBColorSpace);
+  bgCol.setRGB(
+    ((cr*0.022+0.013) + 0.05*wRec)*bgK,        // grabando: un pelín más rojo el fondo
+    (cg*0.022+0.024)*bgK,
+    (cb*0.022+0.042)*(1-0.4*wRec)*bgK,         // y menos azul para que el rojo se note
+    THREE.SRGBColorSpace);
   renderer.setClearColor(bgCol,1);   // niebla queda fija azul A1 (no la tiño -> evita el viraje verde)
 
   // animación global
