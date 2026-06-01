@@ -17,7 +17,7 @@ from .orb import orb_state
 # Auto-stop por silencio (solo modo wake: arranca sin Win+Z, hay que cortar solo).
 # Se activa con env VOICE_WAKE_AUTOSTOP=1; el flujo Win+Z normal NO lo usa.
 _AUTOSTOP = os.environ.get("VOICE_WAKE_AUTOSTOP") == "1"
-_VAD_HANG_S = 1.0        # silencio sostenido tras hablar -> cortar (ágil sin cortar pausas)
+_VAD_HANG_S = 1.5        # silencio sostenido tras hablar -> cortar (margen p/ pausas naturales)
 _VAD_MAX_S = 30.0        # techo duro (no grabar para siempre si nunca calla)
 _VAD_START_GRACE_S = 6.0  # margen inicial para empezar a hablar antes de cortar por silencio
 _VAD_LEADIN_S = 0.5      # ignorar el arranque para 'spoke' (tapa el beep + warmup del stream); ahí se mide el piso de ruido
@@ -111,4 +111,10 @@ def record_until_signaled() -> float:
     os.chmod(AUDIO_FILE, 0o600)   # tu voz -> solo el dueño puede leer el wav
     duration = len(audio) / SAMPLE_RATE
     log(f"wav saved {AUDIO_FILE} duration={duration:.2f}s")
+    # Si el VAD nunca detectó voz sostenida (modo wake), el audio es silencio/ruido.
+    # Devolver 0 -> el flujo lo trata como turno corto y NO transcribe: así Whisper no
+    # alucina (listas de números, "suscríbete", etc.) sobre ambiente y no lo manda a Claude.
+    if _AUTOSTOP and not vad["spoke"]:
+        log("descartado: no se detectó voz -> sin transcribir (anti-alucinación)")
+        return 0.0
     return duration

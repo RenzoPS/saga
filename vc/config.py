@@ -18,7 +18,7 @@ EDGE_RATE = "+5%"  # ligeramente mas rapida
 EDGE_PITCH = "+0Hz"
 
 WHISPER_SIZE = os.environ.get("VOICE_WHISPER_SIZE", "small")  # small: preciso (para voz, entender bien > 2s). base = más rápido/menos preciso
-WHISPER_BEAM = int(os.environ.get("VOICE_WHISPER_BEAM", "5"))  # beam5 con base: costo ~nulo (medido) + búsqueda robusta. beam1 dispara loops
+WHISPER_BEAM = int(os.environ.get("VOICE_WHISPER_BEAM", "5"))  # beam5: búsqueda más amplia/robusta con small (preferencia del usuario). beam1 dispara loops
 # Daemon STT: mantiene el modelo caliente en RAM entre invocaciones (mata los ~3s
 # de recarga por Win+Z). transcribe() es cliente; si el daemon esta caido cae a inline.
 WHISPER_SOCK = Path("/tmp/voice-claude-whisper.sock")
@@ -168,10 +168,19 @@ WAKE_BEEP_FILE = Path("/tmp/voice-claude-beep.wav")  # se genera una vez al arra
 # grammar clava "claude"/"hey claude" y queda mudo en charla normal (casi 0 falsos +).
 # "claude" no está en el léxico ES pero Vosk lo acepta en grammar igual; "claudio/
 # claudia" sí están y atrapan las veces que el AM lo desvía a esos nombres.
+# "claudio"/"claudia" quedan como SEÑUELOS: están en la grammar para darle a Vosk
+# dónde rutear los casi-match (audio del sistema, ruido, voz lejana) en vez de
+# forzarlos a "claude". NO disparan -> ver WAKE_TRIGGER_PHRASES.
 WAKE_GRAMMAR = ("claude", "hey claude", "claudio", "claudia", "[unk]")
-# Substring que confirma "dijo claude" sobre la salida de la grammar. Todas las
-# variantes (claude/claudio/claudia) contienen "claud" -> un solo substring alcanza.
-WAKE_TRIGGER_SUBSTR = "claud"
+# Dispara SOLO si el texto FINAL completo es EXACTAMENTE una de estas frases. Match
+# de frase entera, no substring: 'claudia'/'claudio'/'claude algo'/'la nube claude' NO
+# levantan. 'claudia'/'claudio' siguen en WAKE_GRAMMAR como señuelos: absorben el ruido
+# parecido (lo rutean ahí en vez de a 'claude'), pero al no estar acá, no disparan.
+WAKE_TRIGGER_PHRASES = ("claude", "hey claude")
+# Confianza mínima (la palabra más floja del match, 0..1) para aceptar el wake. Vosk solo
+# da conf en resultados FINALES. Subir si vuelven los falsos +, bajar si cuesta levantar.
+# Arranca permisivo; tunear con las líneas 'final candidato' del log.
+WAKE_MIN_CONF = 0.7
 WAKE_COOLDOWN_S = 2.0  # tras un disparo, ignorar nuevos hasta que pase esto (anti doble-beep)
 # Modo conversación: tras el wake, sigue grabando turnos sin re-decir "claude" hasta
 # que digas una despedida. Match: el texto del turno es CORTO y contiene una frase.

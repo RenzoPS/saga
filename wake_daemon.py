@@ -23,8 +23,8 @@ from pathlib import Path
 # permitir importar el paquete vc/ sin instalar
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from vc.config import (  # noqa: E402
-    WAKE_MODEL_DIR, WAKE_GRAMMAR, WAKE_TRIGGER_SUBSTR,
-    SAMPLE_RATE, LOG_FILE, PROJECT_DIR,
+    WAKE_MODEL_DIR, WAKE_GRAMMAR, WAKE_TRIGGER_PHRASES, WAKE_MIN_CONF,
+    WAKE_COOLDOWN_S, SAMPLE_RATE, LOG_FILE, PROJECT_DIR,
 )
 from vc.sound import ensure_beep, play_beep  # noqa: E402
 
@@ -47,8 +47,19 @@ def log(msg: str) -> None:
         pass
 
 
-def _is_wake(text: str) -> bool:
-    return WAKE_TRIGGER_SUBSTR in text.lower()
+def _wake_match(result: dict):
+    """Sobre un resultado FINAL de Vosk (SetWords(True): 'text' + 'result' = palabras con
+    'conf'), devuelve (text, conf, exact) si el texto contiene la raíz 'claud', o None.
+      - text: texto final completo, normalizado.
+      - conf: confianza mínima entre las palabras (la más floja manda).
+      - exact: True solo si el texto COMPLETO es una WAKE_TRIGGER_PHRASES.
+    NO aplica gate ni decide acá: el caller loguea TODO (incluso descartes) para tunear."""
+    text = (result.get("text") or "").strip().lower()
+    if "claud" not in text:
+        return None
+    words = result.get("result") or []
+    conf = min((float(w.get("conf", 0.0)) for w in words), default=1.0)
+    return text, conf, text in WAKE_TRIGGER_PHRASES
 
 
 def _run_flow(wake_word: str) -> None:
@@ -95,10 +106,15 @@ def main() -> int:
 
 def _listen_until_wake(model, grammar: str) -> str:
     """Abre el mic, escucha en continuo y VUELVE (cerrando el stream) en cuanto oye
-    'claude' — tras beepear. Devuelve la palabra/frase exacta que matcheó.
-    El stream se cierra al salir del `with` -> mic libre."""
+    'claude' — tras beepear. Devuelve la frase exacta que matcheó.
+    El stream se cierra al salir del `with` -> mic libre.
+
+    SOLO dispara en resultados FINALES de Vosk (NO partials): los partials con grammar
+    chica parpadean a cualquier palabra del vocabulario desde ruido / audio del sistema /
+    voz lejana -> eran la causa #1 de falsos positivos. Los finales son estables y traen
+    confianza por palabra. Además: match de frase EXACTA + gate de confianza + cooldown."""
     rec = KaldiRecognizer(model, SAMPLE_RATE, grammar)
-    rec.SetWords(False)
+    rec.SetWords(True)  # necesario para la confianza por palabra
     q: "queue.Queue[bytes]" = queue.Queue()
 
     def cb(indata, _frames, _t, status):
@@ -106,28 +122,32 @@ def _listen_until_wake(model, grammar: str) -> str:
             log(f"audio status: {status}")
         q.put(bytes(indata))
 
-    last_partial = ""
+    last_fire = 0.0
     with sd.RawInputStream(
-        samplerate=SAMPLE_RATE, blocksize=8000, dtype="int16",
+        samplerate=SAMPLE_RATE, blocksize=4000, dtype="int16",  # 0.25s/bloque: Vosk cierra el final más rápido -> menos lag de wake
         channels=1, callback=cb,
     ):
         while True:
             data = q.get()
-            if rec.AcceptWaveform(data):
-                text = json.loads(rec.Result()).get("text", "")
-                if text and _is_wake(text):
-                    log(f"WAKE (final) '{text}'")
-                    play_beep()
-                    return text
-                last_partial = ""
-            else:
-                partial = json.loads(rec.PartialResult()).get("partial", "")
-                if partial and partial != last_partial:
-                    last_partial = partial
-                    if _is_wake(partial):
-                        log(f"WAKE (partial) '{partial}'")
-                        play_beep()
-                        return partial
+            if not rec.AcceptWaveform(data):
+                continue  # partial -> ignorar, esperar al final estable
+            result = json.loads(rec.Result())
+            m = _wake_match(result)
+            if m is None:
+                continue
+            text, conf, exact = m
+            log(f"final candidato '{text}' conf={conf:.2f} exact={exact} (gate={WAKE_MIN_CONF})")
+            if not exact:
+                continue  # 'claudia'/'claudio'/'claude algo'/embebido -> NO dispara
+            if conf < WAKE_MIN_CONF:
+                continue  # frase exacta pero confianza floja -> descartar
+            if time.time() - last_fire < WAKE_COOLDOWN_S:
+                log(f"WAKE ignorado por cooldown '{text}'")
+                continue
+            last_fire = time.time()
+            log(f"WAKE '{text}' (conf={conf:.2f})")
+            play_beep()
+            return text
 
 
 if __name__ == "__main__":
