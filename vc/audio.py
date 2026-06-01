@@ -14,6 +14,16 @@ from .config import SAMPLE_RATE, CHANNELS, AUDIO_FILE, PID_FILE
 from .runtime import log, _cancel, self_identity
 from .orb import orb_state
 
+# Auto-stop por silencio (solo modo wake: arranca sin Win+Z, hay que cortar solo).
+# Se activa con env VOICE_WAKE_AUTOSTOP=1; el flujo Win+Z normal NO lo usa.
+_AUTOSTOP = os.environ.get("VOICE_WAKE_AUTOSTOP") == "1"
+_VAD_HANG_S = 1.0        # silencio sostenido tras hablar -> cortar (ágil sin cortar pausas)
+_VAD_MAX_S = 30.0        # techo duro (no grabar para siempre si nunca calla)
+_VAD_START_GRACE_S = 6.0  # margen inicial para empezar a hablar antes de cortar por silencio
+_VAD_LEADIN_S = 0.5      # ignorar el arranque para 'spoke' (tapa el beep + warmup del stream); ahí se mide el piso de ruido
+_VAD_DEBOUNCE_S = 0.25   # la energía debe SOSTENERSE esto para contar como voz (un blip/click/beep no cuenta)
+_VAD_MIN_FLOOR = 500.0   # piso absoluto del umbral (RMS int16): ruido ambiente bajo no dispara
+
 
 def record_until_signaled() -> float:
     PID_FILE.write_text(self_identity())   # pid:starttime (anti PID-recycle)
@@ -27,13 +37,45 @@ def record_until_signaled() -> float:
     signal.signal(signal.SIGTERM, handler)
 
     orb_state("rec")
-    log("rec start")
+    log(f"rec start{' (auto-stop por silencio)' if _AUTOSTOP else ''}")
 
     buf: "list[np.ndarray]" = []
 
+    # Estado VAD (solo modo wake). Se actualiza en el callback de audio.
+    #  - lead-in: los primeros _VAD_LEADIN_S no cuentan para 'spoke'; ahí se promedia
+    #    el ruido ambiente (y se ignora el beep del turno, que entra por el parlante).
+    #  - debounce: la energía debe sostenerse _VAD_DEBOUNCE_S para declarar voz -> un
+    #    transitorio (click, beep, golpe) no latchea 'spoke' y no dispara grabaciones vacías.
+    vad = {"frames": 0, "amb_sum": 0.0, "amb_n": 0, "floor": None, "thresh": _VAD_MIN_FLOOR,
+           "spoke": False, "speech_since": None, "silence_since": None}
+
     def callback(indata, _frames, _t, _status):
         buf.append(indata.copy())
+        if not _AUTOSTOP:
+            return
+        rms = float(np.sqrt(np.mean(indata.astype(np.float32) ** 2)) + 1e-9)
+        vad["frames"] += len(indata)
+        if vad["frames"] / SAMPLE_RATE < _VAD_LEADIN_S:   # lead-in: medir ambiente, no detectar voz
+            vad["amb_sum"] += rms
+            vad["amb_n"] += 1
+            return
+        if vad["floor"] is None:                          # finalizar piso = promedio del ambiente
+            vad["floor"] = vad["amb_sum"] / max(vad["amb_n"], 1)
+            vad["thresh"] = max(vad["floor"] * 3.0, _VAD_MIN_FLOOR)
+        now = time.monotonic()
+        if rms > vad["thresh"]:
+            if vad["speech_since"] is None:
+                vad["speech_since"] = now
+            if not vad["spoke"] and now - vad["speech_since"] >= _VAD_DEBOUNCE_S:
+                vad["spoke"] = True   # energía sostenida -> recién acá es voz de verdad
+            if vad["spoke"]:
+                vad["silence_since"] = None
+        else:
+            vad["speech_since"] = None   # se cortó: hay que volver a sostener para latchear
+            if vad["spoke"] and vad["silence_since"] is None:
+                vad["silence_since"] = now
 
+    t0 = time.monotonic()
     with sd.InputStream(
         samplerate=SAMPLE_RATE,
         channels=CHANNELS,
@@ -42,6 +84,19 @@ def record_until_signaled() -> float:
     ):
         while not stop_event.is_set() and not _cancel.is_set():
             time.sleep(0.05)   # el orbe anima stylized en 'rec' (no recibe nivel real)
+            if not _AUTOSTOP:
+                continue
+            elapsed = time.monotonic() - t0
+            if elapsed >= _VAD_MAX_S:
+                log("auto-stop: techo de duración")
+                break
+            sil = vad["silence_since"]
+            if vad["spoke"] and sil is not None and time.monotonic() - sil >= _VAD_HANG_S:
+                log("auto-stop: silencio tras hablar")
+                break
+            if not vad["spoke"] and elapsed >= _VAD_START_GRACE_S:
+                log("auto-stop: nadie habló")
+                break
 
     log(f"rec stop. chunks={len(buf)}")
     if not buf:

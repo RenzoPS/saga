@@ -158,6 +158,31 @@ WORD_ALIASES_PATH = PROJECT_DIR / "word_aliases.json"
 
 SESSION_FILE = PROJECT_DIR / "session.json"
 
+# Wake word: daemon Vosk que escucha el mic en continuo y dispara el flujo al oir
+# "claude" (o variantes que el STT chico confunde). Local, sin cuenta, sin training.
+WAKE_MODEL_DIR = PROJECT_DIR / "models" / "vosk-model-small-es-0.42"
+WAKE_BEEP_FILE = Path("/tmp/voice-claude-beep.wav")  # se genera una vez al arrancar el daemon
+# Vosk con GRAMMAR restringida: el recognizer DEBE mapear el audio a una de estas
+# frases o a "[unk]" (que absorbe todo lo demás y queda mudo). Medido en vivo: el
+# recognizer libre escupe basura ('law','icloud','grau') para "claude", pero con
+# grammar clava "claude"/"hey claude" y queda mudo en charla normal (casi 0 falsos +).
+# "claude" no está en el léxico ES pero Vosk lo acepta en grammar igual; "claudio/
+# claudia" sí están y atrapan las veces que el AM lo desvía a esos nombres.
+WAKE_GRAMMAR = ("claude", "hey claude", "claudio", "claudia", "[unk]")
+# Substring que confirma "dijo claude" sobre la salida de la grammar. Todas las
+# variantes (claude/claudio/claudia) contienen "claud" -> un solo substring alcanza.
+WAKE_TRIGGER_SUBSTR = "claud"
+WAKE_COOLDOWN_S = 2.0  # tras un disparo, ignorar nuevos hasta que pase esto (anti doble-beep)
+# Modo conversación: tras el wake, sigue grabando turnos sin re-decir "claude" hasta
+# que digas una despedida. Match: el texto del turno es CORTO y contiene una frase.
+GOODBYE_KEYWORDS = (
+    "gracias", "muchas gracias", "muchisimas gracias", "muchísimas gracias",
+    "listo", "terminamos", "estamos", "todo ready", "todo listo", "ya esta",
+    "ya está", "eso es todo", "eso seria todo", "eso sería todo", "nada mas",
+    "nada más", "chau", "chao", "perfecto gracias", "dale gracias",
+)
+WAKE_MAX_IDLE_TURNS = 3  # silencios/vacíos seguidos -> cortar la conversación sola
+
 # Regex que matchea CUALQUIER mencion visual como palabra suelta.
 # Usa word boundaries para evitar falsos positivos (ej "admira" no matchea "mira").
 VISUAL_RE = re.compile(

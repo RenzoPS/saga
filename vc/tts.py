@@ -91,7 +91,7 @@ class TTSStreamer:
 
     _SENTINEL = object()
 
-    def __init__(self) -> None:
+    def __init__(self, on_play_start=None) -> None:
         self._q: queue.Queue = queue.Queue()
         self._player: "subprocess.Popen | None" = None  # sink MP3 (decoder en chain, o mpg123 en fallback)
         self._play: "subprocess.Popen | None" = None     # reproductor PCM (pacat) en chain
@@ -99,6 +99,11 @@ class TTSStreamer:
         self._pipe_lock = threading.Lock()
         self._sentence_buf: str = ""
         self._pending: str = ""
+        # on_play_start: se llama UNA vez, cuando sale el PRIMER audio real por el
+        # parlante (no en el primer token de Claude). Así el orbe queda en 'think'
+        # mientras Claude piensa/usa tools, y pasa a 'speak' recién al hablar.
+        self._on_play_start = on_play_start
+        self._played = False
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
 
@@ -264,6 +269,13 @@ class TTSStreamer:
             except (BrokenPipeError, OSError) as e:
                 log(f"tts stdin write EXC: {type(e).__name__}: {e}")
                 return
+            if not self._played:   # primer audio real -> recién acá el orbe pasa a 'speak'
+                self._played = True
+                if self._on_play_start is not None:
+                    try:
+                        self._on_play_start()
+                    except Exception as e:
+                        log(f"on_play_start EXC: {type(e).__name__}: {e}")
 
     def _flush_buffer(self) -> None:
         """Sintetiza el buffer con edge-tts y lo pipea a mpg123 como stream MP3."""

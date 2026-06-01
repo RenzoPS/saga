@@ -6,8 +6,12 @@ import json
 import time
 import uuid as uuid_lib
 
-from .config import SESSION_FILE, RESET_KEYWORDS, VISUAL_RE
+import re
+
+from .config import SESSION_FILE, RESET_KEYWORDS, VISUAL_RE, GOODBYE_KEYWORDS
 from .runtime import log
+
+_PUNCT_RE = re.compile(r"[.,!?¿¡;:\"'…\-]+")
 
 
 def _atomic_write(path, text: str) -> None:
@@ -61,3 +65,16 @@ def is_reset_command(text: str) -> bool:
 def is_visual_command(text: str) -> bool:
     """Detecta si el prompt referencia algo que el usuario esta viendo en pantalla."""
     return VISUAL_RE.search(text) is not None
+
+
+def is_goodbye(text: str) -> bool:
+    """Cierre de conversación: el turno es CORTO (<=4 palabras, ya sin puntuación) y
+    contiene una frase de despedida. El guard de longitud evita falsos positivos en
+    consultas largas que mencionen 'gracias' ('gracias por explicarme tal cosa')."""
+    norm = _PUNCT_RE.sub(" ", text.lower()).strip()
+    norm = re.sub(r"\s+", " ", norm)
+    if not norm:
+        return False
+    if len(norm.split()) > 4:
+        return False
+    return any(k in norm for k in GOODBYE_KEYWORDS)

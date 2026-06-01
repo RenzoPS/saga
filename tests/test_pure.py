@@ -12,7 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from vc.tts import clean_for_tts, _next_chunk_cut, _HARD_PUNCT_CHARS, TTSStreamer  # noqa: E402
-from vc.session import is_reset_command, is_visual_command  # noqa: E402
+from vc.session import is_reset_command, is_visual_command, is_goodbye  # noqa: E402
 from vc.guard import denied  # noqa: E402
 
 
@@ -39,6 +39,19 @@ class TestSessionKeywords(unittest.TestCase):
         self.assertTrue(is_visual_command("mirá esto"))
         self.assertTrue(is_visual_command("mostrame la pantalla"))
         self.assertFalse(is_visual_command("admira el cielo"))  # 'mira' embebido no matchea
+
+
+class TestGoodbye(unittest.TestCase):
+    def test_goodbye_positive(self):
+        for t in ["gracias", "muchas gracias", "listo", "dale, gracias",
+                  "terminamos", "todo ready", "chau", "perfecto gracias"]:
+            self.assertTrue(is_goodbye(t), f"debió ser despedida: {t}")
+
+    def test_goodbye_negative_long(self):
+        # frase larga que menciona 'gracias'/'estamos' NO es despedida (guard de longitud)
+        for t in ["gracias por explicarme como funciona el algoritmo",
+                  "estamos hablando de python entonces", "que hora es"]:
+            self.assertFalse(is_goodbye(t), f"NO debió ser despedida: {t}")
 
 
 class TestChunkCut(unittest.TestCase):
