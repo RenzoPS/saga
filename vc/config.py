@@ -95,6 +95,22 @@ if _GUARD:
 if CLAUDE_MEM_DIR:
     CLAUDE_FAST_FLAGS = ["--plugin-dir", CLAUDE_MEM_DIR] + CLAUDE_FAST_FLAGS
 
+
+def build_claude_base_args(session_id: str, flag: str) -> list:
+    """Args base de `claude`, fuente ÚNICA para el daemon y el one-shot (antes
+    estaban duplicados y driftaban). El caller agrega el modo:
+      - daemon / one-shot con imagen: + ['-p', '--input-format', 'stream-json'] (prompt por stdin)
+      - one-shot de texto: + ['-p', prompt]"""
+    args = [
+        "claude", "--model", CLAUDE_MODEL,
+        "--output-format", "stream-json", "--verbose", "--include-partial-messages",
+        "--append-system-prompt", CLAUDE_SYSTEM_PROMPT, flag, session_id,
+    ]
+    args += CLAUDE_FAST_FLAGS
+    if CLAUDE_SKIP_PERMISSIONS:
+        args.append("--dangerously-skip-permissions")
+    return args
+
 # Daemon de Claude: proceso `claude` persistente (stream-json) que mantiene plugins
 # + sesión calientes entre turnos -> mata el cold-start (~5s) de spawnear el CLI cada vez.
 CLAUDE_SOCK = Path("/tmp/voice-claude-claude.sock")

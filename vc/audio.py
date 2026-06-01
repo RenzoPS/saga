@@ -11,12 +11,12 @@ import numpy as np
 import sounddevice as sd
 
 from .config import SAMPLE_RATE, CHANNELS, AUDIO_FILE, PID_FILE
-from .runtime import log, _cancel
+from .runtime import log, _cancel, self_identity
 from .orb import orb_state
 
 
 def record_until_signaled() -> float:
-    PID_FILE.write_text(str(os.getpid()))
+    PID_FILE.write_text(self_identity())   # pid:starttime (anti PID-recycle)
     stop_event = threading.Event()
 
     def handler(_sig, _frame):

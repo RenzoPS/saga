@@ -57,22 +57,21 @@ def set_current_proc(proc: "subprocess.Popen | None") -> None:
 
 
 def kill_current_proc() -> None:
-    """SIGTERM primero (chance de cleanup), SIGKILL si no muere en 1s."""
+    """Mata el claude one-shot y SU GRUPO (se spawnea con start_new_session) ->
+    al cancelar no quedan subspawns de claude-mem huérfanos. SIGTERM -> SIGKILL."""
     with _proc_lock:
         p = _current_proc
     if p is None or p.poll() is not None:
         return
     try:
-        p.terminate()
-    except ProcessLookupError:
-        return
-    except Exception as e:
-        log(f"terminate EXC: {type(e).__name__}: {e}")
-        return
-    try:
-        p.wait(timeout=1.0)
-    except subprocess.TimeoutExpired:
-        log("terminate ignored, sending SIGKILL")
+        pgid = os.getpgid(p.pid)
+        os.killpg(pgid, signal.SIGTERM)
+        try:
+            p.wait(timeout=1.0)
+        except subprocess.TimeoutExpired:
+            log("terminate ignored, SIGKILL al grupo")
+            os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, OSError):
         try:
             p.kill()
         except Exception:
@@ -108,17 +107,45 @@ def pid_alive(pid: int) -> bool:
         return False
 
 
+def _proc_starttime(pid: int) -> str:
+    """starttime del proceso (campo 22 de /proc/pid/stat). Identifica una
+    encarnación concreta de un PID -> distingue un PID reciclado de otro proceso."""
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            data = f.read()
+        return data[data.rindex(")") + 1:].split()[19]   # tras comm: campo 22 = idx 19
+    except (OSError, ValueError, IndexError):
+        return ""
+
+
+def self_identity() -> str:
+    """Identidad propia 'pid:starttime' para lock/pid files (anti PID-recycle)."""
+    pid = os.getpid()
+    return f"{pid}:{_proc_starttime(pid)}"
+
+
 def read_pid_from(path):
+    """Devuelve el pid (int) si el dueño sigue vivo Y es la MISMA encarnación
+    (valida starttime si el archivo lo tiene). Si no, limpia el archivo y None."""
     if not path.exists():
         return None
     try:
-        pid = int(path.read_text().strip())
-    except (ValueError, OSError):
+        raw = path.read_text().strip()
+    except OSError:
+        return None
+    try:
+        pid = int(raw.split(":", 1)[0])
+    except ValueError:
         path.unlink(missing_ok=True)
         return None
     if not pid_alive(pid):
         path.unlink(missing_ok=True)
         return None
+    if ":" in raw:   # validar starttime -> un PID reciclado no se hace pasar por el dueño
+        start = raw.split(":", 1)[1]
+        if start and start != _proc_starttime(pid):
+            path.unlink(missing_ok=True)
+            return None
     return pid
 
 

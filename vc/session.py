@@ -1,6 +1,7 @@
 """Sesión conversacional (uuid persistido) + detección de keywords de voz
 (reset de sesión, referencia visual a la pantalla)."""
 
+import os
 import json
 import time
 import uuid as uuid_lib
@@ -9,9 +10,16 @@ from .config import SESSION_FILE, RESET_KEYWORDS, VISUAL_RE
 from .runtime import log
 
 
+def _atomic_write(path, text: str) -> None:
+    """Escribe tmp + os.replace -> sin torn-read si otra invocación lee a la vez."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(text)
+    os.replace(tmp, path)
+
+
 def _new_session_id() -> str:
     sid = str(uuid_lib.uuid4())
-    SESSION_FILE.write_text(json.dumps({"id": sid, "last_used": time.time()}))
+    _atomic_write(SESSION_FILE, json.dumps({"id": sid, "last_used": time.time()}))
     log(f"session new -> {sid}")
     return sid
 
@@ -36,7 +44,7 @@ def touch_session() -> None:
     try:
         data = json.loads(SESSION_FILE.read_text())
         data["last_used"] = time.time()
-        SESSION_FILE.write_text(json.dumps(data))
+        _atomic_write(SESSION_FILE, json.dumps(data))
     except (json.JSONDecodeError, KeyError, OSError) as e:
         log(f"touch_session fail (contexto no persistido): {type(e).__name__}: {e}")
 

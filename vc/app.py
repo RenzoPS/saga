@@ -14,7 +14,7 @@ from .runtime import (
     set_current_streamer,
     read_recorder_pid,
     read_owner_pid,
-    pid_alive,
+    self_identity,
     signal_stop,
     signal_cancel,
 )
@@ -37,24 +37,27 @@ def stop_path() -> int:
     return 0
 
 
-def _read_abort_pid() -> "int | None":
+def _read_abort_ident() -> "str | None":
     try:
-        return int(ABORT_FILE.read_text().strip())
-    except (ValueError, OSError):
+        return ABORT_FILE.read_text().strip()
+    except OSError:
         return None
 
 
 def abort_path() -> int:
-    pid = read_owner_pid()
+    pid = read_owner_pid()   # valida vivo + starttime (un PID reciclado no pasa)
     if pid is None:
         log("abort called but no owner")
         return 1
+    try:
+        ident = LOCK_FILE.read_text().strip()   # "pid:starttime" del dueño actual
+    except OSError:
+        ident = ""
 
-    # Lock auto-sanable: si a este mismo owner YA lo abortamos y sigue vivo, está
-    # colgado (zombie: ej. carga inline de Whisper, no-cancelable, o sesión muerta).
-    # Lo matamos a la fuerza, limpiamos el lock y tomamos el control (arrancar fresco).
-    if _read_abort_pid() == pid:
-        log(f"owner pid={pid} no murió tras abort -> ZOMBIE, force kill + reclaim")
+    # Lock auto-sanable: si a ESTE MISMO owner (misma identidad pid:starttime) ya lo
+    # abortamos y sigue vivo, está colgado (zombie). Lo matamos y tomamos el control.
+    if ident and _read_abort_ident() == ident:
+        log(f"owner {ident} no murió tras abort -> ZOMBIE, SIGKILL + reclaim")
         try:
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
@@ -68,7 +71,7 @@ def abort_path() -> int:
     log(f"signaling abort to owner pid={pid}")
     signal_cancel(pid)
     try:
-        ABORT_FILE.write_text(str(pid))   # recordar a quién abortamos (para detectar zombie)
+        ABORT_FILE.write_text(ident or str(pid))   # identidad del owner (detección de zombie)
     except OSError:
         pass
     orb_state("cancel")
@@ -80,8 +83,8 @@ def start_path() -> int:
     ensure_monitor_open()
     prewarm_whisper()  # modelo Whisper carga en paralelo mientras el usuario graba
     prewarm_claude()   # daemon Claude calienta plugins/sesión en paralelo (sin cold-start)
-    LOCK_FILE.write_text(str(os.getpid()))
-    ABORT_FILE.unlink(missing_ok=True)   # owner nuevo -> resetear tracker de zombie
+    LOCK_FILE.write_text(self_identity())   # pid:starttime -> anti PID-recycle
+    ABORT_FILE.unlink(missing_ok=True)      # owner nuevo -> resetear tracker de zombie
     signal.signal(signal.SIGUSR2, cancel_handler)
 
     try:

@@ -13,13 +13,10 @@ from pathlib import Path
 from typing import Callable, Iterator
 
 from .config import (
-    CLAUDE_MODEL,
-    CLAUDE_FAST_FLAGS,
-    CLAUDE_SKIP_PERMISSIONS,
     CLAUDE_TIMEOUT_S,
-    CLAUDE_SYSTEM_PROMPT,
     CLAUDE_SOCK,
     CLAUDE_DAEMON,
+    build_claude_base_args,
 )
 from .runtime import log, _cancel, set_current_proc
 from .session import get_active_session_id, touch_session, reset_session
@@ -88,8 +85,8 @@ def _ask_via_daemon(prompt: str, on_first_token) -> "Iterator[str]":
             if _cancel.is_set():
                 return True   # cancelado: el daemon drena solo; turno "manejado"
             if time.time() > deadline:
-                log("daemon claude timeout")
-                return any_delta
+                log("daemon claude timeout -> no re-mando (el daemon tiene su propio timeout; evito turno+memoria duplicados)")
+                return True   # handled: NO caer a one-shot (re-enviar duplicaría respuesta y memoria)
             try:
                 chunk = conn.recv(4096)
             except socket.timeout:
@@ -159,21 +156,15 @@ def _ask_oneshot(
             has_image = False
 
     def _spawn(flag: str) -> subprocess.Popen:
-        args = [
-            "claude", "--model", CLAUDE_MODEL,
-            "--output-format", "stream-json", "--verbose", "--include-partial-messages",
-            "--append-system-prompt", CLAUDE_SYSTEM_PROMPT, flag, session_id,
-        ]
-        args.extend(CLAUDE_FAST_FLAGS)
-        if CLAUDE_SKIP_PERMISSIONS:
-            args.append("--dangerously-skip-permissions")
+        args = build_claude_base_args(session_id, flag)   # fuente única (compartida con el daemon)
         if has_image:
-            args.extend(["-p", "--input-format", "stream-json"])
+            args += ["-p", "--input-format", "stream-json"]
             return subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE, text=True, bufsize=1)
-        args.extend(["-p", prompt])
+                                    stderr=subprocess.PIPE, text=True, bufsize=1,
+                                    start_new_session=True)   # grupo propio -> cancel mata el árbol (no orfana claude-mem)
+        args += ["-p", prompt]
         return subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                text=True, bufsize=1)
+                                text=True, bufsize=1, start_new_session=True)
 
     for attempt, flag in enumerate((first_flag, second_flag)):
         try:

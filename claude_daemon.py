@@ -23,8 +23,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from vc.config import (
-    CLAUDE_SOCK, CLAUDE_MODEL, CLAUDE_FAST_FLAGS, CLAUDE_SKIP_PERMISSIONS,
-    CLAUDE_SYSTEM_PROMPT, CLAUDE_DAEMON_IDLE_S, CLAUDE_DAEMON_TURN_TIMEOUT_S, LOG_FILE,
+    CLAUDE_SOCK, CLAUDE_DAEMON_IDLE_S, CLAUDE_DAEMON_TURN_TIMEOUT_S, LOG_FILE,
+    build_claude_base_args,
 )
 from vc.session import get_active_session_id, reset_session
 
@@ -56,18 +56,8 @@ class ClaudeProc:
         else:
             sid, is_new = get_active_session_id()
             flag = "--session-id" if is_new else "--resume"
-        args = [
-            "claude", "-p",
-            "--model", CLAUDE_MODEL,
-            "--output-format", "stream-json",
-            "--input-format", "stream-json",
-            "--verbose", "--include-partial-messages",
-            "--append-system-prompt", CLAUDE_SYSTEM_PROMPT,
-            flag, sid,
-        ]
-        args += CLAUDE_FAST_FLAGS
-        if CLAUDE_SKIP_PERMISSIONS:
-            args.append("--dangerously-skip-permissions")
+        # fuente única de args (compartida con el one-shot) + modo persistente stdin
+        args = build_claude_base_args(sid, flag) + ["-p", "--input-format", "stream-json"]
         t0 = time.monotonic()
         self.p = subprocess.Popen(
             args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
