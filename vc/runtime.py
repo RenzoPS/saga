@@ -19,6 +19,8 @@ def _rotate_log() -> None:
     try:
         if LOG_FILE.exists() and LOG_FILE.stat().st_size > _LOG_MAX:
             LOG_FILE.replace(LOG_FILE.with_suffix(".log.old"))  # conserva 1 backup
+        LOG_FILE.touch(exist_ok=True)
+        LOG_FILE.chmod(0o600)   # el log tiene transcripciones -> solo el dueño
     except OSError:
         pass
 

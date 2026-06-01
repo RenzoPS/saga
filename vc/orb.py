@@ -1,5 +1,6 @@
-"""Cliente del orbe visual: levanta el server SSE si hace falta y le manda
-estado/nivel por HTTP de forma no bloqueante."""
+"""Cliente del orbe visual: levanta el server SSE si hace falta y le manda el
+ESTADO por HTTP de forma no bloqueante (~5 posts/conversación). El nivel de audio
+ya no se manda (el orbe anima stylized)."""
 
 import os
 import sys
@@ -57,7 +58,6 @@ class _OrbClient:
     """Sender persistente y NO bloqueante hacia el orbe.
 
     - Estados por cola confiable (no se pierden).
-    - Nivel coalescado (ultimo valor) y rate-cap ~33Hz (sync TTS).
     - Una sola conexion HTTP keep-alive; los callers nunca bloquean en red.
     """
 

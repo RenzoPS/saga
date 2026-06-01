@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """Server persistente del orbe de voice-claude.
 
-Sirve orb.html (+ vendor local de three.js) en localhost y emite por SSE:
-  - el estado actual (canal confiable, no se pierde)
-  - el nivel de audio (canal coalescado "ultimo valor", nunca pisa estados)
-
-voice_claude.py hace POST /state?s=<fase> y POST /level?v=<0..1>.
+Sirve orb.html (+ vendor local de three.js) en localhost y emite por SSE el
+estado actual (canal confiable, no se pierde). voice_claude.py hace POST /state?s=<fase>.
+(El nivel de audio se removió: el orbe anima stylized, no recibe audio.)
 Solo stdlib, sin dependencias.
 
 Estados: idle, rec, transcribe, screen, think, speak, nueva, error, cancel.

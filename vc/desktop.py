@@ -1,6 +1,7 @@
 """Integración con el escritorio (Hyprland): notificaciones, ventana monitor
 con el log, y captura de pantalla con grim."""
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -27,6 +28,7 @@ def take_screenshot() -> "Path | None":
             return None
         if not SCREENSHOT_PATH.exists() or SCREENSHOT_PATH.stat().st_size == 0:
             return None
+        os.chmod(SCREENSHOT_PATH, 0o600)   # captura de pantalla = puede tener secretos -> solo el dueño
         size_kb = SCREENSHOT_PATH.stat().st_size // 1024
         log(f"screenshot saved {size_kb}KB")
         return SCREENSHOT_PATH

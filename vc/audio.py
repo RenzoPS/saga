@@ -53,6 +53,7 @@ def record_until_signaled() -> float:
         w.setsampwidth(2)
         w.setframerate(SAMPLE_RATE)
         w.writeframes(audio.tobytes())
+    os.chmod(AUDIO_FILE, 0o600)   # tu voz -> solo el dueño puede leer el wav
     duration = len(audio) / SAMPLE_RATE
     log(f"wav saved {AUDIO_FILE} duration={duration:.2f}s")
     return duration

@@ -36,6 +36,15 @@ DENY = [
 ]
 
 
+def denied(cmd: str) -> "str | None":
+    """Devuelve la etiqueta del patrón catastrófico si el comando matchea, o None.
+    Función pura -> testeable sin stdin."""
+    for pat, label in DENY:
+        if re.search(pat, cmd, re.IGNORECASE):
+            return label
+    return None
+
+
 def main() -> int:
     try:
         data = json.load(sys.stdin)
@@ -44,19 +53,16 @@ def main() -> int:
 
     if data.get("tool_name") != "Bash":
         return 0
-    cmd = ((data.get("tool_input") or {}).get("command") or "")
-
-    for pat, label in DENY:
-        if re.search(pat, cmd, re.IGNORECASE):
-            print(json.dumps({"hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": (
-                    f"Bloqueado por seguridad de voz: {label}. "
-                    "Comando destructivo no permitido por voz; si de verdad lo querés, hacelo a mano en una terminal."
-                ),
-            }}))
-            return 0
+    label = denied((data.get("tool_input") or {}).get("command") or "")
+    if label:
+        print(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": (
+                f"Bloqueado por seguridad de voz: {label}. "
+                "Comando destructivo no permitido por voz; si de verdad lo querés, hacelo a mano en una terminal."
+            ),
+        }}))
     return 0
 
 

@@ -1,6 +1,8 @@
 """Síntesis de voz (TTS) y streaming. Limpieza de markdown, word-aliases,
-microchunking de oraciones, y el pipeline edge-tts -> mpg123 -> pacat con
-metering de nivel (RMS) que alimenta al orbe en tiempo real."""
+microchunking de oraciones, y reproducción edge-tts -> mpg123 (directo).
+NOTA: el orbe NO recibe nivel de audio (anima stylized); el metering RMS se
+sacó porque sincronizar audio-de-un-proceso con visual-de-otro sobre HTTP nunca
+quedaba fino. Ver CLAUDE.md."""
 
 import re
 import json

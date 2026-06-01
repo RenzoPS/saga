@@ -154,6 +154,8 @@ def start_path() -> int:
             streamer.finish()
             streamer.wait(timeout=120)
             set_current_streamer(None)
+            if attach_screenshot is not None:
+                attach_screenshot.unlink(missing_ok=True)   # borrar captura (puede tener secretos en pantalla)
 
         if _cancel.is_set():
             log("cancel during streaming")
