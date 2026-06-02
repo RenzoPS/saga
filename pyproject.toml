@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "voice-claude"
+version = "0.1.0"
+description = "Asistente de voz Linux/Hyprland: voz -> Claude Code -> voz, con orbe 3D reactivo y wake word local (Vosk)."
+readme = "README.md"
+requires-python = ">=3.12"
+
+# Dependencias DIRECTAS (lo que el código importa). El lock completo y reproducible
+# vive en requirements.txt (pip freeze). vosk va sin pin: está en site-packages sin
+# metadata pip (instalado a mano), así que no se puede fijar versión acá.
+dependencies = [
+    "vosk",                    # wake word local (wake_daemon)
+    "faster-whisper==1.2.1",   # STT + Silero VAD (silero_vad_v6.onnx bundleado)
+    "sounddevice==0.5.5",      # captura de micrófono
+    "numpy==2.4.6",
+    "edge-tts==7.2.8",         # síntesis de voz
+]
+
+# Comandos instalados (reemplazan a los wrappers hechos a mano en ~/.local/bin).
+# Tras `pip install -e .` quedan en .venv/bin/voice-claude y .venv/bin/vc-ctl.
+[project.scripts]
+voice-claude = "vc.app:main"
+vc-ctl = "vcctl:main"
+
+[tool.setuptools]
+# El paquete es vc/. Los entry-point scripts de raíz (daemons) se siguen lanzando por
+# ruta (subprocess), no se instalan como módulos; solo vcctl se expone para su comando.
+packages = ["vc"]
+py-modules = ["vcctl"]

@@ -3,6 +3,11 @@
 __pycache__/
 *.pyc
 
+# artefactos de build/instalación editable (pip install -e .)
+*.egg-info/
+build/
+dist/
+
 # estado runtime / logs
 voice_claude.log*
 session.json

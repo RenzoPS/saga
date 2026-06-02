@@ -1,5 +1,11 @@
 """Captura de audio del micrófono. Graba hasta recibir señal de stop (SIGUSR1)
-o cancelación, emite el nivel del mic al orbe en vivo, y guarda el WAV."""
+o cancelación, emite el nivel del mic al orbe en vivo, y guarda el WAV.
+
+Auto-stop (modo wake): usa el VAD de VOZ de Silero (no energía). Detecta HABLA real,
+así ruido/música/ventilador/nivel-de-mic no rompen la detección. El VAD de energía
+anterior calibraba un "piso" en los primeros 0.5s asumiendo silencio; si arrancabas a
+hablar tras el beep, el piso se inflaba a tu voz y NUNCA latcheaba 'spoke' -> cortaba
+siempre a los 6s ('nadie habló') aunque hablaras. Silero no tiene ese problema."""
 
 import os
 import signal
@@ -17,12 +23,55 @@ from .orb import orb_state
 # Auto-stop por silencio (solo modo wake: arranca sin Win+Z, hay que cortar solo).
 # Se activa con env VOICE_WAKE_AUTOSTOP=1; el flujo Win+Z normal NO lo usa.
 _AUTOSTOP = os.environ.get("VOICE_WAKE_AUTOSTOP") == "1"
-_VAD_HANG_S = 1.5        # silencio sostenido tras hablar -> cortar (margen p/ pausas naturales)
-_VAD_MAX_S = 30.0        # techo duro (no grabar para siempre si nunca calla)
-_VAD_START_GRACE_S = 6.0  # margen inicial para empezar a hablar antes de cortar por silencio
-_VAD_LEADIN_S = 0.5      # ignorar el arranque para 'spoke' (tapa el beep + warmup del stream); ahí se mide el piso de ruido
-_VAD_DEBOUNCE_S = 0.25   # la energía debe SOSTENERSE esto para contar como voz (un blip/click/beep no cuenta)
-_VAD_MIN_FLOOR = 500.0   # piso absoluto del umbral (RMS int16): ruido ambiente bajo no dispara
+_VAD_HANG_S = 2.0          # silencio (sin HABLA) sostenido tras hablar -> cortar
+_VAD_MAX_S = 120.0         # techo de seguridad (2 min): solo frena un runaway
+_VAD_START_GRACE_S = 6.0   # margen inicial para empezar a hablar antes de cortar
+_VAD_TAIL_S = 12.0         # ventana reciente que analiza Silero por tick (acota costo)
+_VAD_EVAL_EVERY_S = 0.35   # cada cuánto correr el VAD (cada llamada ~10-50ms)
+
+# Silero VAD: modelo de VOZ bundleado en faster-whisper (silero_vad_v6.onnx + onnxruntime,
+# ya instalados; cero deps nuevas). Se carga en un thread al arrancar la grabación (~450ms)
+# para no sumar al import del flujo ni demorar el inicio de la captura.
+_vad = {"fn": None, "opts": None, "err": None}
+
+
+def _load_vad_async() -> None:
+    if _vad["fn"] is not None or _vad["err"] is not None:
+        return
+
+    def _job():
+        try:
+            from faster_whisper.vad import get_speech_timestamps, VadOptions, get_vad_model
+            get_vad_model()  # calienta el lru_cache del onnx
+            _vad["opts"] = VadOptions(
+                min_speech_duration_ms=200,   # ignora blips < 0.2s (clicks, golpes)
+                min_silence_duration_ms=100,
+                speech_pad_ms=30,
+            )
+            _vad["fn"] = get_speech_timestamps
+        except Exception as e:  # noqa: BLE001
+            _vad["err"] = e
+            log(f"VAD Silero no cargó ({e!r}); auto-stop sólo por techo de duración")
+
+    threading.Thread(target=_job, daemon=True).start()
+
+
+def _speech_and_silence(audio_i16: np.ndarray):
+    """Sobre la cola reciente devuelve (hubo_habla, seg_silencio_al_final) con Silero.
+    hubo_habla=True si detectó HABLA en la ventana; silencio = tiempo desde que terminó
+    la última habla. (None, 0) si el modelo todavía no cargó -> el caller no corta aún."""
+    fn, opts = _vad["fn"], _vad["opts"]
+    if fn is None:
+        return None, 0.0
+    audio_i16 = audio_i16.reshape(-1)   # el buffer del mic viene (N,1); Silero exige 1D
+    n_tail = int(_VAD_TAIL_S * SAMPLE_RATE)
+    tail = audio_i16[-n_tail:] if len(audio_i16) > n_tail else audio_i16
+    audio = tail.astype(np.float32) / 32768.0
+    segs = fn(audio, opts)
+    tail_s = len(audio) / SAMPLE_RATE
+    if not segs:
+        return False, tail_s
+    return True, tail_s - segs[-1]["end"] / SAMPLE_RATE
 
 
 def record_until_signaled() -> float:
@@ -37,44 +86,18 @@ def record_until_signaled() -> float:
     signal.signal(signal.SIGTERM, handler)
 
     orb_state("rec")
-    log(f"rec start{' (auto-stop por silencio)' if _AUTOSTOP else ''}")
+    log(f"rec start{' (auto-stop por voz)' if _AUTOSTOP else ''}")
 
     buf: "list[np.ndarray]" = []
 
-    # Estado VAD (solo modo wake). Se actualiza en el callback de audio.
-    #  - lead-in: los primeros _VAD_LEADIN_S no cuentan para 'spoke'; ahí se promedia
-    #    el ruido ambiente (y se ignora el beep del turno, que entra por el parlante).
-    #  - debounce: la energía debe sostenerse _VAD_DEBOUNCE_S para declarar voz -> un
-    #    transitorio (click, beep, golpe) no latchea 'spoke' y no dispara grabaciones vacías.
-    vad = {"frames": 0, "amb_sum": 0.0, "amb_n": 0, "floor": None, "thresh": _VAD_MIN_FLOOR,
-           "spoke": False, "speech_since": None, "silence_since": None}
-
     def callback(indata, _frames, _t, _status):
         buf.append(indata.copy())
-        if not _AUTOSTOP:
-            return
-        rms = float(np.sqrt(np.mean(indata.astype(np.float32) ** 2)) + 1e-9)
-        vad["frames"] += len(indata)
-        if vad["frames"] / SAMPLE_RATE < _VAD_LEADIN_S:   # lead-in: medir ambiente, no detectar voz
-            vad["amb_sum"] += rms
-            vad["amb_n"] += 1
-            return
-        if vad["floor"] is None:                          # finalizar piso = promedio del ambiente
-            vad["floor"] = vad["amb_sum"] / max(vad["amb_n"], 1)
-            vad["thresh"] = max(vad["floor"] * 3.0, _VAD_MIN_FLOOR)
-        now = time.monotonic()
-        if rms > vad["thresh"]:
-            if vad["speech_since"] is None:
-                vad["speech_since"] = now
-            if not vad["spoke"] and now - vad["speech_since"] >= _VAD_DEBOUNCE_S:
-                vad["spoke"] = True   # energía sostenida -> recién acá es voz de verdad
-            if vad["spoke"]:
-                vad["silence_since"] = None
-        else:
-            vad["speech_since"] = None   # se cortó: hay que volver a sostener para latchear
-            if vad["spoke"] and vad["silence_since"] is None:
-                vad["silence_since"] = now
 
+    if _AUTOSTOP:
+        _load_vad_async()   # arranca la carga del modelo en paralelo a la captura
+
+    spoke = False
+    last_eval = 0.0
     t0 = time.monotonic()
     with sd.InputStream(
         samplerate=SAMPLE_RATE,
@@ -90,11 +113,18 @@ def record_until_signaled() -> float:
             if elapsed >= _VAD_MAX_S:
                 log("auto-stop: techo de duración")
                 break
-            sil = vad["silence_since"]
-            if vad["spoke"] and sil is not None and time.monotonic() - sil >= _VAD_HANG_S:
+            if elapsed - last_eval < _VAD_EVAL_EVERY_S or not buf:
+                continue
+            last_eval = elapsed
+            had_speech, silence_s = _speech_and_silence(np.concatenate(buf))
+            if had_speech is None:
+                continue   # modelo aún cargando -> no cortar todavía
+            if had_speech:
+                spoke = True
+            if spoke and silence_s >= _VAD_HANG_S:
                 log("auto-stop: silencio tras hablar")
                 break
-            if not vad["spoke"] and elapsed >= _VAD_START_GRACE_S:
+            if not spoke and elapsed >= _VAD_START_GRACE_S:
                 log("auto-stop: nadie habló")
                 break
 
@@ -111,10 +141,4 @@ def record_until_signaled() -> float:
     os.chmod(AUDIO_FILE, 0o600)   # tu voz -> solo el dueño puede leer el wav
     duration = len(audio) / SAMPLE_RATE
     log(f"wav saved {AUDIO_FILE} duration={duration:.2f}s")
-    # Si el VAD nunca detectó voz sostenida (modo wake), el audio es silencio/ruido.
-    # Devolver 0 -> el flujo lo trata como turno corto y NO transcribe: así Whisper no
-    # alucina (listas de números, "suscríbete", etc.) sobre ambiente y no lo manda a Claude.
-    if _AUTOSTOP and not vad["spoke"]:
-        log("descartado: no se detectó voz -> sin transcribir (anti-alucinación)")
-        return 0.0
     return duration
