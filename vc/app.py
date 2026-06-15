@@ -8,7 +8,7 @@ from pathlib import Path
 
 import os
 
-from .config import LOCK_FILE, PID_FILE, ABORT_FILE, MIN_DURATION_S, PROJECT_DIR
+from .config import LOCK_FILE, PID_FILE, ABORT_FILE, MIN_DURATION_S, PROJECT_DIR, LIVEKIT_ENABLED
 from .runtime import (
     log,
     _cancel,
@@ -62,9 +62,12 @@ def abort_path() -> int:
         ident = ""
 
     # Lock auto-sanable: si a ESTE MISMO owner (misma identidad pid:starttime) ya lo
-    # abortamos y sigue vivo, está colgado (zombie). Lo matamos y tomamos el control.
+    # abortamos y sigue vivo, está colgado (zombie). 2do Win+Z = APAGAR: lo matamos,
+    # limpiamos y volvemos a idle. (Antes acá arrancaba un turno nuevo -> se sentía
+    # como "no apaga": apretabas para frenar y se ponía a grabar de nuevo.) Otro Win+Z
+    # después arranca fresco.
     if ident and _read_abort_ident() == ident:
-        log(f"owner {ident} no murió tras abort -> ZOMBIE, SIGKILL + reclaim")
+        log(f"owner {ident} no murió tras abort -> ZOMBIE, SIGKILL + apagar")
         try:
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
@@ -72,7 +75,8 @@ def abort_path() -> int:
         LOCK_FILE.unlink(missing_ok=True)
         PID_FILE.unlink(missing_ok=True)
         ABORT_FILE.unlink(missing_ok=True)
-        return start_path()
+        orb_state("idle")
+        return 0
 
     # Cancel normal (interrumpir una respuesta en curso). Instantáneo.
     log(f"signaling abort to owner pid={pid}")
@@ -185,10 +189,36 @@ def start_path() -> int:
         LOCK_FILE.unlink(missing_ok=True)
 
 
+def _livekit_toggle() -> int:
+    """Win+Z en modo LiveKit: manda 'toggle' al agente por el socket de control para
+    prender/apagar el mic (push-to-talk). Si el agente no responde, avisa."""
+    import socket
+    from .config import LK_CTL_SOCK
+
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(2.0)
+        s.connect(str(LK_CTL_SOCK))
+        s.sendall(b"press\n")
+        s.recv(64)
+        s.close()
+        log("Win+Z -> press (LiveKit)")
+        return 0
+    except OSError as e:
+        log(f"Win+Z: agente LiveKit no responde ({type(e).__name__}); ¿corriste 'vc-ctl start'?")
+        return 1
+
+
 def main() -> int:
     if "--doctor" in sys.argv:
         from .doctor import doctor
         return doctor()
+
+    # En modo LiveKit, Win+Z es el push-to-talk: NO corre el flujo viejo; le manda
+    # "toggle" al agente para prender/apagar el mic (1er toque = escuchar, 2do = mandar
+    # turno). El agente es dueño del audio/streaming; nosotros sólo decidimos cuándo escucha.
+    if LIVEKIT_ENABLED:
+        return _livekit_toggle()
 
     PROJECT_DIR.mkdir(parents=True, exist_ok=True)
     load_word_aliases()

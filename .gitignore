@@ -10,9 +10,14 @@ dist/
 
 # estado runtime / logs
 voice_claude.log*
+livekit_agent.log*
 session.json
 .guard-settings.json
 *.wav
+
+# secretos: API keys (Deepgram, etc). NUNCA se commitea.
+.env
+.env.local
 
 # todo lo de Claude (CLAUDE.md + superpowers): local, NO se commitea
 .claude/

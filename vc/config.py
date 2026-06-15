@@ -92,7 +92,13 @@ _GUARD = _ensure_guard_settings()
 CLAUDE_FAST_FLAGS = ["--setting-sources", "", "--disable-slash-commands"]
 if _GUARD:
     CLAUDE_FAST_FLAGS = ["--settings", _GUARD] + CLAUDE_FAST_FLAGS
-if CLAUDE_MEM_DIR:
+# claude-mem en el daemon de voz: recall + captura por turno. PROBADO en vivo: el
+# hook de recall (antes de responder) infla el TTFT de ~2s a 4-7s -> demasiado para
+# voz. Default OFF (la velocidad gana). El transcript queda en voice_claude.log, así
+# que lo importante se puede ingestar a demanda (sesión Claude -> Obsidian) sin pagar
+# latencia por turno. VOICE_CLAUDE_MEM=1 lo reactiva. Respawnear el daemon al cambiar.
+CLAUDE_MEM_ENABLED = os.environ.get("VOICE_CLAUDE_MEM", "0") == "1"
+if CLAUDE_MEM_DIR and CLAUDE_MEM_ENABLED:
     CLAUDE_FAST_FLAGS = ["--plugin-dir", CLAUDE_MEM_DIR] + CLAUDE_FAST_FLAGS
 
 
@@ -141,6 +147,29 @@ CHANNELS = 1
 MIN_DURATION_S = 0.4
 CLAUDE_TIMEOUT_S = 180
 
+# Auto-stop por silencio (VAD Silero) también en el flujo Win+Z, no solo en modo wake.
+# Default ON: apretás Win+Z, hablás, y corta solo al callar (no hace falta 2do Win+Z
+# para cortar). El 2do Win+Z para cortar a mano sigue andando igual. VOICE_AUTOSTOP=0
+# vuelve al modo clásico "Win+Z arranca / Win+Z corta".
+AUTOSTOP_ON_MANUAL = os.environ.get("VOICE_AUTOSTOP", "1") != "0"
+
+# Modo LiveKit. Cuando está ON, el runtime de audio (captura, streaming, chunks, VAD,
+# turn detection, barge-in) lo maneja livekit-agents (lk/agent.py console) EN VEZ de
+# nuestro whisper_daemon + flujo Win+Z. Claude sigue siendo el cerebro y el orbe +
+# edge-tts se reusan. Default ON -> `vc-ctl start` levanta el agente LiveKit. Para
+# volver al modo clásico (Win+Z por-turno): VOICE_LIVEKIT=0. Ver lk/README.md.
+LIVEKIT_ENABLED = os.environ.get("VOICE_LIVEKIT", "1") != "0"
+LK_AGENT = PROJECT_DIR / "lk" / "agent.py"
+LK_LOG = PROJECT_DIR / "livekit_agent.log"
+# Socket de control: Win+Z (vc/app.py) le manda "toggle"/"on"/"off" al agente para
+# prender/apagar el mic (push-to-talk). Lo crea y escucha el proceso del agente.
+LK_CTL_SOCK = Path("/tmp/voice-claude-lk-ctl.sock")
+
+# Secretos del proyecto (API keys). Archivo gitignored, cargado por el agente con
+# python-dotenv. NO es config seteable: el STT/TTS los decide el código (Deepgram por
+# default; si no hay key, cae solo a whisper/edge). Acá solo vive el secreto.
+ENV_FILE = PROJECT_DIR / ".env.local"
+
 MONITOR_CLASS = "voice-claude-monitor"
 MONITOR_WORKSPACE = 10
 
@@ -157,6 +186,12 @@ ORB_SERVER = ORB_DIR / "orb_server.py"
 WORD_ALIASES_PATH = PROJECT_DIR / "word_aliases.json"
 
 SESSION_FILE = PROJECT_DIR / "session.json"
+
+# Wake word ON/OFF. Default OFF: el trigger es Win+Z (sin escucha continua -> 0
+# falsos positivos, 0 contención de mic, un daemon menos). El wake_daemon y TODO su
+# código quedan intactos; VOICE_WAKE_ENABLED=1 reactiva la escucha de "claude".
+# Lo lee vcctl al levantar para decidir si lanza el wake_daemon.
+WAKE_ENABLED = os.environ.get("VOICE_WAKE_ENABLED", "0") == "1"
 
 # Wake word: daemon Vosk que escucha el mic en continuo y dispara el flujo al oir
 # "claude" (o variantes que el STT chico confunde). Local, sin cuenta, sin training.

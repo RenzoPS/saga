@@ -16,13 +16,14 @@ import threading
 import numpy as np
 import sounddevice as sd
 
-from .config import SAMPLE_RATE, CHANNELS, AUDIO_FILE, PID_FILE
+from .config import SAMPLE_RATE, CHANNELS, AUDIO_FILE, PID_FILE, AUTOSTOP_ON_MANUAL
 from .runtime import log, _cancel, self_identity
 from .orb import orb_state
 
-# Auto-stop por silencio (solo modo wake: arranca sin Win+Z, hay que cortar solo).
-# Se activa con env VOICE_WAKE_AUTOSTOP=1; el flujo Win+Z normal NO lo usa.
-_AUTOSTOP = os.environ.get("VOICE_WAKE_AUTOSTOP") == "1"
+# Auto-stop por silencio (VAD Silero). Modo wake: siempre (arranca sin Win+Z, hay que
+# cortar solo). Flujo Win+Z: según AUTOSTOP_ON_MANUAL (default ON) -> apretás, hablás,
+# corta al callar. El 2do Win+Z para cortar a mano sigue funcionando igual.
+_AUTOSTOP = os.environ.get("VOICE_WAKE_AUTOSTOP") == "1" or AUTOSTOP_ON_MANUAL
 _VAD_HANG_S = 2.0          # silencio (sin HABLA) sostenido tras hablar -> cortar
 _VAD_MAX_S = 120.0         # techo de seguridad (2 min): solo frena un runaway
 _VAD_START_GRACE_S = 6.0   # margen inicial para empezar a hablar antes de cortar

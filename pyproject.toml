@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "voice-claude"
 version = "0.1.0"
-description = "Asistente de voz Linux/Hyprland: voz -> Claude Code -> voz, con orbe 3D reactivo y wake word local (Vosk)."
+description = "Asistente de voz Linux/Hyprland: voz -> Claude Code -> voz, sobre LiveKit + Deepgram, con orbe 3D reactivo."
 readme = "README.md"
 requires-python = ">=3.12"
 
@@ -13,11 +13,18 @@ requires-python = ">=3.12"
 # vive en requirements.txt (pip freeze). vosk va sin pin: está en site-packages sin
 # metadata pip (instalado a mano), así que no se puede fijar versión acá.
 dependencies = [
-    "vosk",                    # wake word local (wake_daemon)
-    "faster-whisper==1.2.1",   # STT + Silero VAD (silero_vad_v6.onnx bundleado)
-    "sounddevice==0.5.5",      # captura de micrófono
+    # --- Stack LiveKit + Deepgram (modo por default) ---
+    "livekit-agents",                      # runtime de audio: captura/streaming/VAD/turn/barge-in
+    "livekit-plugins-silero",              # VAD (voz vs silencio)
+    "livekit-plugins-deepgram",            # STT Nova-3 + TTS Aura-2 (streaming, default)
+    "livekit-plugins-noise-cancellation",  # BVC: saca ruido/voces de fondo del mic
+    "python-dotenv",                       # carga DEEPGRAM_API_KEY de .env.local
+    # --- Fallback local (si no hay DEEPGRAM_API_KEY) + flujo clásico ---
+    "faster-whisper==1.2.1",   # STT local de fallback
+    "edge-tts==7.2.8",         # TTS local de fallback
+    "sounddevice==0.5.5",      # captura de micrófono (flujo clásico)
     "numpy==2.4.6",
-    "edge-tts==7.2.8",         # síntesis de voz
+    "vosk",                    # wake word local (wake_daemon, OFF por default)
 ]
 
 # Comandos instalados (reemplazan a los wrappers hechos a mano en ~/.local/bin).
