@@ -175,6 +175,12 @@ MONITOR_WORKSPACE = 10
 
 SCREENSHOT_PATH = Path("/tmp/voice-claude-screenshot.png")
 
+# Adjuntos pegados desde la pestaña del orbe (texto/imagen). El navegador los manda por
+# POST a orb_server, que los escribe acá; el agente (lk/claude_llm) los lee en el turno y
+# los borra (consume-once, mismo patrón dead-drop que SCREENSHOT_PATH). /tmp es tmpfs (RAM).
+ATTACH_TEXT_PATH = Path("/tmp/voice-claude-attach.txt")
+ATTACH_IMG_PATH = Path("/tmp/voice-claude-attach.png")
+
 # Orbe visual: server SSE persistente en localhost, la pagina (orb/orb.html) se
 # sincroniza en vivo con la fase actual.
 ORB_DIR = PROJECT_DIR / "orb"

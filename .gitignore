@@ -25,3 +25,7 @@ session.json
 # temporales del sistema
 /tmp/
 models/
+
+# artefactos de testing/visual (no van al repo)
+.playwright-mcp/
+orb-core-*.png

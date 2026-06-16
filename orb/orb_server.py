@@ -4,9 +4,11 @@
 Sirve orb.html (+ vendor local de three.js) en localhost y emite por SSE el
 estado actual (canal confiable, no se pierde). voice_claude.py hace POST /state?s=<fase>.
 (El nivel de audio se removió: el orbe anima stylized, no recibe audio.)
-Solo stdlib, sin dependencias.
+Tambien recibe POST /attach?kind=text|image: el navegador manda el contenido pegado y se
+escribe en /tmp (dead-drop), que el agente consume en el turno. Solo stdlib + paths de
+vc.config (constantes locales, sin dependencias pip).
 
-Estados: idle, rec, transcribe, screen, think, speak, nueva, error, cancel.
+Estados: idle, rec, transcribe, screen, think, speak, nueva, error, cancel, attach.
 """
 import os
 import sys
@@ -17,6 +19,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
+# Paths del adjunto: fuente unica en vc.config. Insertamos el root del repo en sys.path
+# (mismo patron que los daemons del proyecto) para importar la constante sin duplicar la ruta.
+_ROOT = Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+from vc.config import ATTACH_TEXT_PATH, ATTACH_IMG_PATH
+
 PORT = int(os.environ.get("ORB_PORT", "8777"))
 TOKEN = os.environ.get("ORB_TOKEN", "")          # vacio = sin auth (local)
 IDLE_TIMEOUT = 180.0                              # seg sin actividad -> vuelve a idle
@@ -26,7 +35,7 @@ VENDOR = (HERE / "vendor").resolve()
 
 VALID_STATES = {
     "idle", "rec", "transcribe", "screen",
-    "think", "speak", "nueva", "error", "cancel",
+    "think", "speak", "nueva", "error", "cancel", "attach",
 }
 MIME = {".js": "text/javascript", ".css": "text/css",
         ".html": "text/html; charset=utf-8", ".json": "application/json"}
@@ -159,14 +168,43 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(403)
             return
         ln = int(self.headers.get("Content-Length") or 0)
-        if ln:
-            self.rfile.read(ln)                       # drena el body
+        body = self.rfile.read(ln) if ln else b""     # leemos el body (lo usa /attach)
         if parsed.path == "/state":
             name = (parse_qs(parsed.query).get("s") or [None])[0]
             broadcast(normalize_state(name))
             self._ok204()
             return
+        if parsed.path == "/attach":
+            kind = (parse_qs(parsed.query).get("kind") or [""])[0]
+            self._stage_attach(kind, body)
+            return
         self.send_error(404)
+
+    def _stage_attach(self, kind: str, body: bytes) -> None:
+        """Guarda el adjunto pegado en /tmp (dead-drop). El navegador autoguarda en vivo y
+        manda SIEMPRE el contenido completo -> OVERWRITE; body vacío -> BORRA. El agente lo
+        consume y borra en el turno. /tmp es tmpfs (RAM)."""
+        try:
+            if kind == "text":
+                text = body.decode("utf-8", "replace").strip()
+                if text:
+                    ATTACH_TEXT_PATH.write_text(text, "utf-8")
+                    os.chmod(ATTACH_TEXT_PATH, 0o600)
+                else:
+                    ATTACH_TEXT_PATH.unlink(missing_ok=True)
+            elif kind == "image":
+                if body:
+                    ATTACH_IMG_PATH.write_bytes(body)
+                    os.chmod(ATTACH_IMG_PATH, 0o600)
+                else:
+                    ATTACH_IMG_PATH.unlink(missing_ok=True)
+            else:
+                self.send_error(400, "kind invalido")
+                return
+        except OSError:
+            self.send_error(500, "no se pudo guardar el adjunto")
+            return
+        self._ok204()
 
     def _ok204(self):
         self.send_response(204)

@@ -13,6 +13,48 @@
   #conn{position:fixed;top:12px;right:14px;font-size:11px;color:#3a5667;z-index:6}
   #conn.ok{color:#2bd6a6} #conn.off{color:#e0556e}
   #fallback{position:fixed;inset:0;display:none;align-items:center;justify-content:center;text-align:center;padding:30px;color:#9fc4d6;z-index:9}
+  /* ── adjuntar: SOLO una barra. Se abre al llevar el mouse abajo (zona ancha + mouseenter,
+     apertura instantánea). Al abrir, la red del orbe sube y se achica (modo mini). Autoguarda;
+     cierra con enter/esc/clic afuera. Acento magenta del estado 'attach'. ── */
+  #hotzone{position:fixed;left:0;right:0;bottom:0;height:46px;z-index:7}   /* zona de apertura (mouseenter) */
+  #hint{position:fixed;left:50%;bottom:10px;transform:translateX(-50%);z-index:7;pointer-events:none;user-select:none;
+        color:#ff5bd0;font-size:22px;line-height:1;opacity:.22;text-shadow:0 0 12px rgba(255,72,207,.6);
+        transition:opacity .3s;animation:hintrise 2.2s ease-in-out infinite}
+  #hint::after{content:"\2303"}                  /* ⌃ flecha hacia arriba */
+  #hint.near{opacity:.75}
+  @keyframes hintrise{0%,100%{transform:translateX(-50%) translateY(0)}50%{transform:translateX(-50%) translateY(-4px)}}
+  #backdrop{position:fixed;inset:0;z-index:8;display:flex;align-items:center;justify-content:center;
+            background:transparent;opacity:0;pointer-events:none;transition:opacity .18s ease}
+  #backdrop.open{opacity:1;pointer-events:auto}
+  /* la barra = vidrio esmerilado que EMITE luz como el orbe: translúcida (deja ver las
+     partículas detrás), halo cyan+magenta suave (eco del bloom), sin borde duro. Al enfocar,
+     el halo se intensifica -> la barra "reacciona" como el orbe. */
+  #card{position:relative;display:flex;align-items:flex-start;gap:13px;width:min(560px,92vw);padding:15px 19px;
+        border-radius:22px;background:rgba(13,19,28,.5);
+        backdrop-filter:blur(22px) saturate(1.35);-webkit-backdrop-filter:blur(22px) saturate(1.35);
+        border:1px solid rgba(150,200,255,.10);
+        box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 10px 44px rgba(0,0,0,.45),
+                   0 0 48px rgba(102,180,255,.10),0 0 78px rgba(255,90,205,.07);
+        transform:translateY(12px) scale(.99);opacity:0;
+        transition:transform .22s cubic-bezier(.22,1,.36,1),opacity .22s,box-shadow .3s,border-color .3s}
+  #backdrop.open #card{transform:none;opacity:1}
+  #card:focus-within{border-color:rgba(255,120,220,.26);
+        box-shadow:inset 0 1px 0 rgba(255,255,255,.09),0 10px 44px rgba(0,0,0,.5),
+                   0 0 60px rgba(102,180,255,.17),0 0 100px rgba(255,90,205,.15)}
+  /* nodo líder = mini-bloom cyan->magenta: el mismo material de luz que el núcleo del orbe */
+  #anode{flex-shrink:0;width:10px;height:10px;margin-top:8px;border-radius:50%;
+        background:radial-gradient(circle at 50% 45%,#eafaff,#66e0ff 38%,#ff5bd0 82%,rgba(255,91,208,0));
+        box-shadow:0 0 12px rgba(102,224,255,.8),0 0 24px rgba(255,91,208,.5);animation:nodepulse 3s ease-in-out infinite}
+  @keyframes nodepulse{0%,100%{opacity:.72;transform:scale(.86)}50%{opacity:1;transform:scale(1.16)}}
+  #atext{flex:1;min-width:0;box-sizing:border-box;min-height:26px;max-height:34vh;resize:none;border:0;background:transparent;
+         color:#eaf3fb;font:15.5px/1.6 system-ui,sans-serif;padding:3px 0;outline:none;caret-color:#ff5bd0}
+  #atext::placeholder{color:rgba(150,180,205,.42)}
+  #atext::selection{background:rgba(255,91,208,.3);color:#fff}
+  #achip{display:none;align-items:center;gap:7px;flex-shrink:0}
+  #achip img{height:42px;width:42px;object-fit:cover;border-radius:10px;border:1px solid rgba(150,200,255,.25);box-shadow:0 0 16px rgba(102,180,255,.22)}
+  #achip .x{cursor:pointer;color:#8c9aa8;font-size:13px;transition:color .15s}
+  #achip .x:hover{color:#ff5b7e}
+  @media (prefers-reduced-motion:reduce){ #card,#backdrop{transition:none} #hint,#anode{animation:none} }
 </style>
 </head>
 <body>
@@ -20,6 +62,16 @@
 <div id="label"></div>
 <div id="conn">○</div>
 <div id="fallback"><div>No cargó WebGL/Three.js.<br>Verificá conexión y recargá.</div></div>
+
+<div id="hotzone"></div>
+<div id="hint"></div>
+<div id="backdrop">
+  <div id="card">
+    <span id="anode"></span>
+    <div id="achip"><img alt=""><span class="x" title="Quitar imagen">✕</span></div>
+    <textarea id="atext" placeholder="pegá o escribí — ctrl+v pega imágenes"></textarea>
+  </div>
+</div>
 
 <script type="importmap">
 { "imports": {
@@ -46,14 +98,16 @@ const PH={
   speak:    {col:[0.12,0.96,0.28], speed:0.28, energy:1.00, glyph:'♪  Hablando'},
   nueva:    {col:[0.33,1.00,0.60], speed:0.40, energy:0.90, glyph:'↻  Sesión nueva'},
   error:    {col:[1.00,0.86,0.26], speed:0.20, energy:0.50, glyph:'◌  No te entendí'},
-  cancel:   {col:[1.00,0.33,0.47], speed:0.10, energy:0.40, glyph:'✕  Cancelado'}
+  cancel:   {col:[1.00,0.33,0.47], speed:0.10, energy:0.40, glyph:'✕  Cancelado'},
+  attach:   {col:[1.00,0.30,0.80], speed:0.30, energy:0.85, glyph:'📎  Cargado'}
 };
-const TRANSIENT={nueva:1.8,error:1.8,cancel:1.1};
+const TRANSIENT={nueva:1.8,error:1.8,cancel:1.1,attach:1.4};
 let mode='idle', target=PH.idle, cur={col:[...PH.idle.col],E:PH.idle.energy,S:PH.idle.speed};
 let transTimer=0;
 // comportamiento por estado: pesos que entran/salen suave + transientes
 let wScreen=0, wRec=0, wSpeak=0;
-let appear=0, appearTarget=1, flashV=0, wobbleV=0;
+let appear=0, appearTarget=1, flashV=0, wobbleV=0, absorbV=0, armed=false;
+let lift=0, liftTarget=0;   // panel abierto: la red sube y se achica (modo mini)
 
 function setLabel(s){const el=document.getElementById('label');el.textContent=s||'';el.style.opacity=s?1:0;}
 function setState(name){
@@ -62,9 +116,13 @@ function setState(name){
   appearTarget=(name==='cancel')?0:1;   // cancel colapsa
   if(name==='nueva')flashV=1;            // destello al resetear sesión
   if(name==='error')wobbleV=1;           // sacudida al no entender
+  if(name==='attach'){absorbV=1;armed=true;}      // absorción del adjunto + queda armado
+  else if(name!=='idle'){armed=false;             // arrancó un turno -> el adjunto se consume
+    if(name==='rec' && window.__attachTurnStart) window.__attachTurnStart();}   // grabando: limpiar UI del adjunto
   transTimer=TRANSIENT[name]||0;
 }
 window.setState=setState;
+window.__orbLift=function(on){ liftTarget=on?1:0; };   // el panel le avisa al orbe que suba/baje
 
 // ===== SSE =====
 (function connect(){
@@ -150,21 +208,24 @@ const moteMat=nodeMat.clone(); moteMat.uniforms.tex.value=GLOW;
 const motes=new THREE.Points(moteGeo,moteMat); group.add(motes);
 const moteState=Array.from({length:MOTES},()=>({a:0,b:0,t:Math.random(),sp:0.3+Math.random()*0.5}));
 
-// ---- polvo ambiental ----
-const DUST=160, dustPos=new Float32Array(DUST*3), dustSize=new Float32Array(DUST), dustCol=new Float32Array(DUST*3);
-for(let i=0;i<DUST;i++){const rr=R*(1.15+Math.random()*1.3),u=Math.random()*Math.PI*2,v=Math.acos(2*Math.random()-1);
-  dustPos[i*3]=rr*Math.sin(v)*Math.cos(u);dustPos[i*3+1]=rr*Math.cos(v);dustPos[i*3+2]=rr*Math.sin(v)*Math.sin(u);
-  dustSize[i]=0.03+Math.random()*0.05;}
+// ---- polvo ambiental: esparcido por TODA la pantalla (caja grande), no solo alrededor de
+// la red. Va en la ESCENA (no en group) -> no se achica/sube con el orbe mini; llena el vacío. ----
+const DUST=240, dustPos=new Float32Array(DUST*3), dustSize=new Float32Array(DUST), dustCol=new Float32Array(DUST*3);
+for(let i=0;i<DUST;i++){
+  dustPos[i*3]  =(Math.random()*2-1)*9.5;     // ancho: cubre el viewport
+  dustPos[i*3+1]=(Math.random()*2-1)*6.6;     // alto
+  dustPos[i*3+2]=-2.5+Math.random()*6.0;      // profundidad (delante y detrás del plano del orbe)
+  dustSize[i]=0.022+Math.random()*0.05;}
 const dustGeo=new THREE.BufferGeometry();
 dustGeo.setAttribute('position',new THREE.BufferAttribute(dustPos,3));
 dustGeo.setAttribute('size',new THREE.BufferAttribute(dustSize,1));
 dustGeo.setAttribute('color',new THREE.BufferAttribute(dustCol,3));
-const dustMat=nodeMat.clone(); dustMat.uniforms.tex.value=GLOW; dustMat.opacity=0.5;
-const dust=new THREE.Points(dustGeo,dustMat); group.add(dust);
+const dustMat=nodeMat.clone(); dustMat.uniforms.tex.value=GLOW; dustMat.opacity=0.45;
+const dust=new THREE.Points(dustGeo,dustMat); scene.add(dust);
 
 // ---- núcleo C1 ----
 const core=new THREE.Mesh(new THREE.IcosahedronGeometry(0.16,2),
-  new THREE.MeshBasicMaterial({color:0xffffff,transparent:true}));
+  new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,blending:THREE.AdditiveBlending,depthWrite:false}));
 group.add(core);
 const coreGlow=new THREE.Sprite(new THREE.SpriteMaterial({map:GLOW,color:0x66e0ff,transparent:true,blending:THREE.AdditiveBlending,depthWrite:false}));
 coreGlow.scale.set(1.6,1.6,1.6); group.add(coreGlow);
@@ -183,6 +244,7 @@ addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updat
 // ---- loop ----
 const clock=new THREE.Clock();
 const bgCol=new THREE.Color();   // reusado por frame para teñir fondo/niebla
+const armCol=new THREE.Color(1.0,0.30,0.80);   // magenta del estado 'attach' (indicador armado)
 // envelope stylized con variación orgánica: fases aleatorias por sesión (cada vez se ve
 // distinto) + drift de amplitud con senoide lenta (varía dentro del habla, 100% suave, sin jitter).
 const _ph=[Math.random()*6.28,Math.random()*6.28,Math.random()*6.28,Math.random()*6.28];
@@ -212,7 +274,8 @@ function frame(){
   wRec+=(((mode==='rec')?1:0)-wRec)*0.2;
   wSpeak+=(((mode==='speak')?1:0)-wSpeak)*0.2;
   appear+=(appearTarget-appear)*((mode==='cancel')?0.16:0.1);
-  flashV*=0.92; wobbleV*=0.88;
+  flashV*=0.92; wobbleV*=0.88; absorbV*=0.90;   // absorbV: pulso de absorción del adjunto, decae ~1.4s
+  lift+=(liftTarget-lift)*0.12;                 // ease del modo mini (panel abierto)
   const ap=Math.max(0,Math.min(1,appear));
   const implode=(mode==='cancel')?(1-ap):0;
   const exPhase=0.5+0.5*Math.sin(t*1.15);                    // ciclo expandir/contraer (mirando pantalla)
@@ -226,7 +289,7 @@ function frame(){
   const seed=Math.floor(t/1.4), prog=(t%1.4)/1.4, pulse=Math.sin(prog*Math.PI);
   const foci=[(seed*17)%N,(seed*41+7)%N,(seed*29+19)%N];
   const fset=new Set(foci);
-  const macro=voice*recExpand*expand*(1-implode*0.85)*(0.25+0.75*ap);
+  const macro=voice*recExpand*expand*(1-implode*0.85)*(0.25+0.75*ap)*(1-0.4*absorbV);   // absorción: la red se contrae al núcleo y rebota
   const netFade=1-wRec;   // grabando: la red entera (nodos/líneas/haces/motas) se apaga -> queda el núcleo
   for(let i=0;i<N;i++){const br=(1+0.04*Math.sin(t*1.6+i*0.7)+lvl*0.05)*macro;
     nodePos[i*3]=dir[i][0]*R*br; nodePos[i*3+1]=dir[i][1]*R*br; nodePos[i*3+2]=dir[i][2]*R*br;
@@ -276,18 +339,21 @@ function frame(){
   dustGeo.attributes.color.needsUpdate=true;
 
   // núcleo (colapsa en cancel, aparece con ap) — pintado con el color del estado
-  const cs=(1+lvl*0.5+pulse*0.12)*(0.25+0.75*ap)*(1-implode);
-  core.scale.setScalar(Math.max(0.001,cs)); core.material.opacity=ap;
-  core.material.color.setRGB(0.45+0.55*cr,0.45+0.55*cg,0.45+0.55*cb);   // blanco-cálido teñido al estado
+  const cs=(1+lvl*0.5+pulse*0.12)*(0.25+0.75*ap)*(1-implode)*0.55;   // *0.55: núcleo más chico, menos protagonista
+  core.scale.setScalar(Math.max(0.001,cs)); core.material.opacity=ap*0.35;   // aditivo + depthWrite:false: no tapa el glow (no más disco oscuro central)
+  core.material.color.setRGB(Math.min(1,cr*0.85+0.1),Math.min(1,cg*0.85+0.1),Math.min(1,cb*0.85+0.1));   // mismo tono que la aureola interior (coreGlow) -> el núcleo se funde con ella
   coreGlow.material.color.setRGB(Math.min(1,cr*0.85+0.1),Math.min(1,cg*0.85+0.1),Math.min(1,cb*0.85+0.1));  // halo con el tono del estado
   coreGlow.scale.setScalar((1.4+lvl*1.1)*(0.4+0.6*ap)); coreGlow.material.opacity=ap;
+  // indicador "armado": hay un adjunto en cola -> respiración magenta sutil en idle (browser-local)
+  const armGlow=(armed && mode==='idle') ? (0.5+0.5*Math.sin(t*2.2)) : 0;
+  if(armGlow>0) coreGlow.material.color.lerp(armCol, armGlow*0.6);
 
-  // bloom reactivo (+ destello en sesión nueva)
-  bloom.strength=0.85+lvl*0.9+flashV*0.9;
+  // bloom reactivo (+ destello en sesión nueva, + flash de absorción del adjunto, + armado)
+  bloom.strength=0.85+lvl*0.9+flashV*0.9+absorbV*1.3+armGlow*0.25;
 
   // fondo + niebla teñidos sutilmente hacia el color del estado
   // OJO: setRGB en sRGB (sin esto, gamma sube el valor y el bloom revienta a blanco)
-  const bgK=1-implode;   // cancel: fondo se funde a NEGRO mientras la orbe colapsa
+  const bgK=(1-implode)*(1-0.6*lift);   // cancel funde a negro; panel abierto OPACA EL FONDO (no la orbe: sus nodos son aditivos -> siguen brillando)
   // base azul oscura tipo A1 (#04070b) + tinte sutil del estado. El acople de color
   // fuerte llega por el BLOOM de los nodos (como A1), no por reventar el clearColor.
   bgCol.setRGB(
@@ -301,10 +367,11 @@ function frame(){
   group.rotation.y+=0.0016+cur.S*0.004;
   group.rotation.x=0.18 - my*0.5;
   group.position.x=(Math.random()-0.5)*wobbleV*0.4;          // sacudida en error
-  const breath=1+wSpeak*(lvl*0.10)+(1-wSpeak)*(0.02*Math.sin(t*1.9));  // hablando: respira con la voz
+  group.position.y=lift*1.82;                                // panel abierto: la red sube por encima de la barra (sin cortarse arriba)
+  const breath=(1+wSpeak*(lvl*0.10)+(1-wSpeak)*(0.02*Math.sin(t*1.9)))*(1-0.6*lift);  // y se achica bastante (mini)
   group.scale.setScalar(breath);
   camera.position.x=mx*1.3; camera.position.y=-my*1.0; camera.lookAt(0,0,0);
-  dust.rotation.y-=0.0006;
+  dust.rotation.y-=0.00035;   // deriva muy lenta del polvo de pantalla completa
 
   composer.render();
   requestAnimationFrame(frame);
@@ -312,6 +379,58 @@ function frame(){
 document.addEventListener('visibilitychange',()=>{ if(!looping && !document.hidden){ looping=true; requestAnimationFrame(frame); } });
 frame();
 }catch(e){console.error(e);document.getElementById('fallback').style.display='flex';}
+</script>
+
+<script>
+// Adjuntar: una BARRA. Independiente de Three.js (anda aunque el orbe no cargue). Se abre al
+// llevar el mouse abajo (zona ancha + mouseenter -> instantáneo y confiable); al abrir avisa
+// al orbe que suba/se achique (modo mini). Autoguarda en vivo (POST a orb_server -> dead-drop
+// /tmp) SIN botón; cierra con Enter / Esc / clic afuera. Se limpia al grabar (Win+Z -> 'rec').
+(function(){
+  const back=document.getElementById('backdrop');
+  const hot=document.getElementById('hotzone');
+  const hint=document.getElementById('hint');
+  const ta=document.getElementById('atext');
+  const chip=document.getElementById('achip');
+  const chipImg=chip.querySelector('img');
+  let imgBlob=null, saveT=null, canOpen=true;
+  const isOpen=()=>back.classList.contains('open');
+
+  function openPanel(){ if(isOpen()||!canOpen)return; back.classList.add('open'); if(window.__orbLift)window.__orbLift(true); setTimeout(()=>ta.focus(),60); }
+  function closePanel(){ if(!isOpen())return;
+    flushText();                                   // asegurar el último texto guardado
+    back.classList.remove('open'); if(window.__orbLift)window.__orbLift(false);
+    canOpen=false; setTimeout(()=>{canOpen=true;},450);   // evita reabrir al instante si cerrás cerca del borde inferior
+    if((ta.value.trim()||imgBlob) && window.setState) window.setState('attach'); }   // cerrar con contenido -> el orbe "absorbe"
+
+  // ABRIR: el mouse entra a la zona inferior (mouseenter = confiable). Solo ABRE.
+  // CERRAR: Enter / Esc / clic afuera de la barra.
+  hot.addEventListener('mouseenter', ()=>{ if(!isOpen()) openPanel(); });
+  addEventListener('pointermove',e=>{ hint.classList.toggle('near', e.clientY>innerHeight-90); });   // la flecha brilla al acercarse
+  back.addEventListener('click',e=>{ if(e.target===back) closePanel(); });   // clic afuera de la barra
+  addEventListener('keydown',e=>{ if(e.key==='Escape'&&isOpen()) closePanel(); });
+
+  // ---- autoguardado del texto (overwrite; el textarea es la fuente de verdad; vacío borra) ----
+  function postText(body){ try{ fetch('/attach?kind=text',{method:'POST',body}); }catch(e){} }
+  function flushText(){ clearTimeout(saveT); postText(ta.value.trim()); }
+  ta.addEventListener('input',()=>{ clearTimeout(saveT); saveT=setTimeout(()=>postText(ta.value.trim()),350); });
+  // Enter (sin Shift) = cerrar (ya está guardado). Shift+Enter = salto de línea.
+  ta.addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); closePanel(); } });
+
+  // ---- imagen: paste -> preview + POST inmediato; ✕ -> borra en el server ----
+  function postImage(blob){ try{ fetch('/attach?kind=image',{method:'POST',body:blob}); }catch(e){} }
+  function clearImage(){ if(chipImg.getAttribute('src'))URL.revokeObjectURL(chipImg.src);
+    chipImg.removeAttribute('src'); imgBlob=null; chip.style.display='none'; }
+  function setChip(file){ imgBlob=file; chipImg.src=URL.createObjectURL(file); chip.style.display='flex'; postImage(file); }
+  chip.querySelector('.x').addEventListener('click',()=>{ clearImage(); postImage(new Blob()); });   // body vacío -> server borra
+  back.addEventListener('paste',ev=>{
+    const items=ev.clipboardData&&ev.clipboardData.items; if(!items)return;
+    for(const it of items){ if(it.type&&it.type.startsWith('image/')){ ev.preventDefault(); const f=it.getAsFile(); if(f)setChip(f); } }
+  });
+
+  // ---- Win+Z (estado 'rec'): el agente consumió el adjunto -> limpiar la UI (sin red) ----
+  window.__attachTurnStart=function(){ ta.value=''; clearTimeout(saveT); clearImage(); };
+})();
 </script>
 </body>
 </html>

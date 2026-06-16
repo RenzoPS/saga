@@ -16,6 +16,7 @@ from vc.runtime import log
 from vc.session import is_visual_command
 from vc.desktop import take_screenshot
 from vc.orb import orb_state
+from vc.attach import take_staged
 
 
 def _last_user_text(chat_ctx: "llm.ChatContext") -> str:
@@ -55,9 +56,16 @@ class ClaudeCodeLLM(llm.LLM):
 
 class _ClaudeStream(llm.LLMStream):
     async def _run(self) -> None:
-        prompt = _last_user_text(self._chat_ctx)
-        if not prompt:
+        # Prompt del turno = adjunto de texto pegado (si hay) + consigna hablada.
+        # take_staged() consume el adjunto: el texto se borra acá; la imagen se devuelve y la
+        # borra el worker tras mandarla (igual que el screenshot). Imagen pegada > "mirá pantalla".
+        voice = _last_user_text(self._chat_ctx)
+        clip_text, clip_img = take_staged()
+        prompt = "\n\n".join(p for p in (clip_text, voice) if p)
+        if not prompt and clip_img is None:
             return
+        if not prompt:
+            prompt = "Analizá la imagen que te adjunté."   # imagen sola, sin texto ni voz
 
         loop = asyncio.get_running_loop()
         q: "asyncio.Queue" = asyncio.Queue()
@@ -66,12 +74,14 @@ class _ClaudeStream(llm.LLMStream):
         def _worker() -> None:
             # ask_claude_stream es un generador BLOQUEANTE (daemon socket / subprocess).
             # Lo corremos en un thread y puenteamos los deltas a la cola asyncio.
-            shot = None
+            shot = clip_img   # imagen pegada (si hay) tiene prioridad sobre "mirá pantalla"
             try:
-                # Visión: si el prompt referencia algo visual ("mirá", "pantalla", etc.),
-                # capturamos screenshot y se lo mandamos a Claude (va por el one-shot, que
-                # maneja imagen). Igual que el flujo clásico: capturar -> mandar -> borrar.
-                if is_visual_command(prompt):
+                if shot is not None:
+                    orb_state("screen")
+                    log("[lk] adjunto imagen -> a Claude")
+                # Visión: si NO pegaste imagen pero el prompt referencia algo visual ("mirá",
+                # "pantalla", etc.), capturamos screenshot. Igual que el flujo clásico.
+                elif is_visual_command(prompt):
                     shot = take_screenshot()
                     if shot is not None:
                         orb_state("screen")
@@ -82,7 +92,7 @@ class _ClaudeStream(llm.LLMStream):
                 loop.call_soon_threadsafe(q.put_nowait, e)
             finally:
                 if shot is not None:
-                    shot.unlink(missing_ok=True)   # borrar captura (puede tener secretos en pantalla)
+                    shot.unlink(missing_ok=True)   # borrar captura/imagen pegada (consume-once; puede tener secretos)
                 loop.call_soon_threadsafe(q.put_nowait, _DONE)
 
         fut = loop.run_in_executor(None, _worker)

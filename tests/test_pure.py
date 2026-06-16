@@ -11,9 +11,12 @@ from pathlib import Path
 # permitir `python tests/test_pure.py` desde cualquier cwd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import tempfile  # noqa: E402
+
 from vc.tts import clean_for_tts, _next_chunk_cut, _HARD_PUNCT_CHARS, TTSStreamer  # noqa: E402
 from vc.session import is_reset_command, is_visual_command, is_goodbye  # noqa: E402
 from vc.guard import denied  # noqa: E402
+from vc import attach  # noqa: E402
 
 
 class TestCleanForTTS(unittest.TestCase):
@@ -90,6 +93,45 @@ class TestTTSFlush(unittest.TestCase):
 
     def test_no_flush_without_punct(self):
         self.assertFalse(TTSStreamer._should_flush_after("sin puntuacion", "mas texto"))
+
+
+class TestAttach(unittest.TestCase):
+    """Adjunto pegado: consume-once. Parchea las paths a un tmp aislado."""
+    def setUp(self):
+        self._dir = tempfile.mkdtemp()
+        self._t = Path(self._dir) / "a.txt"
+        self._i = Path(self._dir) / "a.png"
+        self._orig = (attach.ATTACH_TEXT_PATH, attach.ATTACH_IMG_PATH)
+        attach.ATTACH_TEXT_PATH, attach.ATTACH_IMG_PATH = self._t, self._i
+
+    def tearDown(self):
+        attach.ATTACH_TEXT_PATH, attach.ATTACH_IMG_PATH = self._orig
+
+    def test_empty(self):
+        self.assertFalse(attach.has_staged())
+        self.assertEqual(attach.take_staged(), (None, None))
+
+    def test_text_is_consumed(self):
+        self._t.write_text("hola", "utf-8")
+        self.assertTrue(attach.has_staged())
+        txt, img = attach.take_staged()
+        self.assertEqual(txt, "hola")
+        self.assertIsNone(img)
+        self.assertFalse(self._t.exists())          # texto se borra al leerlo
+
+    def test_image_path_returned_not_deleted(self):
+        self._i.write_bytes(b"\x89PNG")
+        txt, img = attach.take_staged()
+        self.assertIsNone(txt)
+        self.assertEqual(img, self._i)
+        self.assertTrue(self._i.exists())           # la imagen la borra el worker, no take_staged
+
+    def test_text_and_image_together(self):
+        self._t.write_text("contexto", "utf-8")
+        self._i.write_bytes(b"x")
+        txt, img = attach.take_staged()
+        self.assertEqual(txt, "contexto")
+        self.assertEqual(img, self._i)
 
 
 if __name__ == "__main__":
