@@ -104,6 +104,10 @@ async def entry(ctx: "agents.JobContext") -> None:
         turn_handling={
             "turn_detection": "vad",
             "endpointing": {"min_delay": 2.0, "max_delay": 4.0},
+            # Interrupción por VAD local (silero), NO "adaptive" (que es el default y
+            # necesita LIVEKIT_API_KEY de la nube -> sin key fallaba al crear el detector
+            # y rompía todo al apretar Win+Z mientras hablaba). vad = local, sin key.
+            "interruption": {"mode": "vad"},
         },
     )
 
