@@ -410,12 +410,27 @@ frame();
   back.addEventListener('click',e=>{ if(e.target===back) closePanel(); });   // clic afuera de la barra
   addEventListener('keydown',e=>{ if(e.key==='Escape'&&isOpen()) closePanel(); });
 
-  // ---- autoguardado del texto (overwrite; el textarea es la fuente de verdad; vacío borra) ----
-  function postText(body){ try{ fetch('/attach?kind=text',{method:'POST',body}); }catch(e){} }
-  function flushText(){ clearTimeout(saveT); postText(ta.value.trim()); }
-  ta.addEventListener('input',()=>{ clearTimeout(saveT); saveT=setTimeout(()=>postText(ta.value.trim()),350); });
-  // Enter (sin Shift) = cerrar (ya está guardado). Shift+Enter = salto de línea.
-  ta.addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); closePanel(); } });
+  // ---- staging del texto: va a MEMORIA del agente por /stage (overwrite; vacío limpia) ----
+  function postStage(body){ try{ fetch('/stage',{method:'POST',body}); }catch(e){} }
+  function flushText(){ clearTimeout(saveT); postStage(ta.value.trim()); }
+  ta.addEventListener('input',()=>{ clearTimeout(saveT); saveT=setTimeout(()=>postStage(ta.value.trim()),350); });
+  // Enter (sin Shift) = cerrar (ya está guardado, se consume en el próximo turno de voz).
+  // Shift+Enter = ENVIAR YA como prompt de texto, sin grabar voz (turno inmediato).
+  ta.addEventListener('keydown',e=>{
+    if(e.key==='Enter'&&e.shiftKey){ e.preventDefault(); sendText(); }
+    else if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); closePanel(); }
+  });
+
+  // Prompt directo por texto: dispara /say (el texto viaja en el comando; el agente limpia el
+  // staged solo, sin doble consumo). La imagen pegada (si hay) se mantiene -> se incluye.
+  function postSay(body){ try{ fetch('/say',{method:'POST',body}); }catch(e){} }
+  function sendText(){
+    const t=ta.value.trim(); if(!t)return;
+    clearTimeout(saveT); ta.value='';
+    postSay(t);
+    if(window.setState) window.setState('think');
+    closePanel();
+  }
 
   // ---- imagen: paste -> preview + POST inmediato; ✕ -> borra en el server ----
   function postImage(blob){ try{ fetch('/attach?kind=image',{method:'POST',body:blob}); }catch(e){} }

@@ -22,6 +22,7 @@ Correr local, sin servidor ni cuenta:
 
 import os
 import sys
+import base64
 import asyncio
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -36,6 +37,7 @@ from livekit.plugins import noise_cancellation   # BVC: saca ruido + voces de fo
 from dotenv import load_dotenv
 
 from lk.claude_llm import ClaudeCodeLLM
+from vc.attach import stage_text, clear_text
 from vc.claudecli import prewarm_claude
 from vc.config import CLAUDE_SYSTEM_PROMPT, LK_CTL_SOCK, ENV_FILE
 from vc.orb import ensure_orb, orb_state
@@ -196,13 +198,46 @@ async def entry(ctx: "agents.JobContext") -> None:
             orb_state("cancel")             # animación de cancelado -> vuelve a idle solo
             log("[lk] Win+Z -> matar (cancelado)")
 
+    def _say(text: str) -> None:
+        """Prompt directo por TEXTO (Shift+Enter en el panel del orbe): dispara un turno
+        inmediato sin grabar voz. Pasa por el MISMO LLM (ClaudeCodeLLM) + TTS -> responde por
+        voz. La imagen pegada (si hay) se incluye vía take_staged() dentro del LLM."""
+        clear_text()   # el texto ya viaja en `text` (user_input) -> descartá el staged, no dupliques
+        if phase["v"] == "rec":
+            session.input.set_audio_enabled(False)   # estabas grabando -> cancelá el mic
+        elif phase["v"] == "busy":
+            session.interrupt(force=True)            # respuesta en curso -> cortala y reemplazá
+        phase["v"] = "busy"
+        orb_state("think")
+        session.generate_reply(user_input=text)      # user_input -> ClaudeCodeLLM lee el último turno
+        log("[lk] prompt por texto -> turno inmediato")
+
     async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
             data = await asyncio.wait_for(reader.readline(), timeout=2.0)
-            cmd = data.decode("utf-8", "replace").strip().lower()
+            raw = data.decode("utf-8", "replace").strip()
+            cmd, _, arg = raw.partition(" ")    # "say <b64>" -> no lowercasear el payload
+            cmd = cmd.lower()
             if cmd in ("press", "toggle"):   # Win+Z -> una acción según la fase
                 _press()
                 writer.write(b"ok\n")
+            elif cmd == "stage":             # texto del textarea (autosave) -> staged en memoria
+                try:
+                    text = base64.b64decode(arg.encode("ascii")).decode("utf-8", "replace")
+                except (ValueError, UnicodeDecodeError):
+                    text = ""
+                stage_text(text)             # vacío -> limpia el staged
+                writer.write(b"ok\n")
+            elif cmd == "say":               # prompt por texto -> turno inmediato
+                try:
+                    text = base64.b64decode(arg.encode("ascii")).decode("utf-8", "replace").strip()
+                except (ValueError, UnicodeDecodeError):
+                    text = ""
+                if text:
+                    _say(text)
+                    writer.write(b"ok\n")
+                else:
+                    writer.write(b"err\n")
             else:
                 writer.write(b"err\n")
             await writer.drain()

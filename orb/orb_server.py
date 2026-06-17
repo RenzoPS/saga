@@ -4,9 +4,13 @@
 Sirve orb.html (+ vendor local de three.js) en localhost y emite por SSE el
 estado actual (canal confiable, no se pierde). voice_claude.py hace POST /state?s=<fase>.
 (El nivel de audio se removió: el orbe anima stylized, no recibe audio.)
-Tambien recibe POST /attach?kind=text|image: el navegador manda el contenido pegado y se
-escribe en /tmp (dead-drop), que el agente consume en el turno. Solo stdlib + paths de
-vc.config (constantes locales, sin dependencias pip).
+Endpoints de entrada del panel del orbe (reenvian al socket o escriben /tmp, sin tocar el stack de voz):
+  POST /attach?kind=image  -> imagen pegada -> dead-drop en /tmp (binaria, Claude la lee de disco).
+  POST /stage              -> texto del textarea (autosave) -> reenvia `stage <b64>` al socket de
+                              control del agente, que lo guarda en MEMORIA (no toca el filesystem).
+  POST /say                -> prompt directo (Shift+Enter) -> reenvia `say <b64>` al socket -> el
+                              agente dispara un turno inmediato sin grabar voz.
+Solo stdlib + paths/constantes de vc.config (sin dependencias pip).
 
 Estados: idle, rec, transcribe, screen, think, speak, nueva, error, cancel, attach.
 """
@@ -14,6 +18,8 @@ import os
 import sys
 import time
 import queue
+import base64
+import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -24,7 +30,7 @@ from urllib.parse import urlparse, parse_qs
 _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
-from vc.config import ATTACH_TEXT_PATH, ATTACH_IMG_PATH
+from vc.config import ATTACH_IMG_PATH, LK_CTL_SOCK
 
 PORT = int(os.environ.get("ORB_PORT", "8777"))
 TOKEN = os.environ.get("ORB_TOKEN", "")          # vacio = sin auth (local)
@@ -176,31 +182,53 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/attach":
             kind = (parse_qs(parsed.query).get("kind") or [""])[0]
-            self._stage_attach(kind, body)
+            self._stage_image(kind, body)
+            return
+        if parsed.path == "/stage":
+            # Autosave del textarea: SIEMPRE reenvía (body vacío -> el agente limpia el staged).
+            self._forward_ctl("stage", body, allow_empty=True)
+            return
+        if parsed.path == "/say":
+            # Shift+Enter: no disparar un turno vacío.
+            if not body.strip():
+                self._ok204()
+                return
+            self._forward_ctl("say", body, allow_empty=False)
             return
         self.send_error(404)
 
-    def _stage_attach(self, kind: str, body: bytes) -> None:
-        """Guarda el adjunto pegado en /tmp (dead-drop). El navegador autoguarda en vivo y
-        manda SIEMPRE el contenido completo -> OVERWRITE; body vacío -> BORRA. El agente lo
-        consume y borra en el turno. /tmp es tmpfs (RAM)."""
+    def _forward_ctl(self, verb: str, body: bytes, allow_empty: bool) -> None:
+        """Reenvía `verb <b64>` al socket de control del agente LiveKit. El payload va en base64
+        en una sola línea (tolera saltos de línea sin romper el framing por readline). NO toca el
+        stack de voz: solo le pasa un comando al agente, que decide qué hacer."""
+        if not body.strip() and not allow_empty:
+            self._ok204()
+            return
         try:
-            if kind == "text":
-                text = body.decode("utf-8", "replace").strip()
-                if text:
-                    ATTACH_TEXT_PATH.write_text(text, "utf-8")
-                    os.chmod(ATTACH_TEXT_PATH, 0o600)
-                else:
-                    ATTACH_TEXT_PATH.unlink(missing_ok=True)
-            elif kind == "image":
-                if body:
-                    ATTACH_IMG_PATH.write_bytes(body)
-                    os.chmod(ATTACH_IMG_PATH, 0o600)
-                else:
-                    ATTACH_IMG_PATH.unlink(missing_ok=True)
+            payload = base64.b64encode(body).decode("ascii")   # body vacío -> payload ""
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.settimeout(2.0)
+            s.connect(str(LK_CTL_SOCK))
+            s.sendall(verb.encode("ascii") + b" " + payload.encode("ascii") + b"\n")
+            s.recv(64)
+            s.close()
+        except OSError:
+            self.send_error(503, "agente LiveKit no responde")
+            return
+        self._ok204()
+
+    def _stage_image(self, kind: str, body: bytes) -> None:
+        """Imagen pegada -> dead-drop en /tmp (binaria; Claude la lee como screenshot_path). El
+        navegador manda el contenido completo -> OVERWRITE; body vacío -> BORRA. /tmp es tmpfs."""
+        if kind != "image":
+            self.send_error(400, "kind invalido (solo image; el texto va por /stage)")
+            return
+        try:
+            if body:
+                ATTACH_IMG_PATH.write_bytes(body)
+                os.chmod(ATTACH_IMG_PATH, 0o600)
             else:
-                self.send_error(400, "kind invalido")
-                return
+                ATTACH_IMG_PATH.unlink(missing_ok=True)
         except OSError:
             self.send_error(500, "no se pudo guardar el adjunto")
             return

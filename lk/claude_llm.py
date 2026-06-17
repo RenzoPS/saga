@@ -11,9 +11,9 @@ import asyncio
 
 from livekit.agents import llm, utils, APIConnectionError, DEFAULT_API_CONNECT_OPTIONS
 
-from vc.claudecli import ask_claude_stream
+from vc.claudecli import ask_claude_stream, reset_claude
 from vc.runtime import log
-from vc.session import is_visual_command
+from vc.session import is_visual_command, is_reset_command
 from vc.desktop import take_screenshot
 from vc.orb import orb_state
 from vc.attach import take_staged
@@ -60,6 +60,24 @@ class _ClaudeStream(llm.LLMStream):
         # take_staged() consume el adjunto: el texto se borra acá; la imagen se devuelve y la
         # borra el worker tras mandarla (igual que el screenshot). Imagen pegada > "mirá pantalla".
         voice = _last_user_text(self._chat_ctx)
+
+        # Reset por voz ("nueva sesión", "empezamos de cero", etc.): mismo enganche que el
+        # flujo clásico (vc/app.py), portado al turn handler de LiveKit. Resetea la sesión de
+        # Claude (el daemon respawnea) y cortamos el turno con una confirmación hablada, sin
+        # mandar la consigna a Claude. No tocamos un adjunto pegado: take_staged() queda para
+        # el próximo turno real.
+        if is_reset_command(voice):
+            reset_claude()
+            log("[lk] reset por keyword de voz -> nueva sesión")
+            orb_state("nueva")
+            self._event_ch.send_nowait(
+                llm.ChatChunk(
+                    id=utils.shortuuid(),
+                    delta=llm.ChoiceDelta(role="assistant", content="Listo, arrancamos de cero."),
+                )
+            )
+            return
+
         clip_text, clip_img = take_staged()
         prompt = "\n\n".join(p for p in (clip_text, voice) if p)
         if not prompt and clip_img is None:
