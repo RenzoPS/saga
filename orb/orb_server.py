@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Server persistente del orbe de voice-claude.
+"""Server persistente del orbe de saga.
 
 Sirve orb.html (+ vendor local de three.js) en localhost y emite por SSE el
-estado actual (canal confiable, no se pierde). voice_claude.py hace POST /state?s=<fase>.
+estado actual (canal confiable, no se pierde). saga.py hace POST /state?s=<fase>.
 (El nivel de audio se removió: el orbe anima stylized, no recibe audio.)
 Endpoints de entrada del panel del orbe (reenvian al socket o escriben /tmp, sin tocar el stack de voz):
   POST /attach?kind=image  -> imagen pegada -> dead-drop en /tmp (binaria, Claude la lee de disco).
@@ -78,7 +78,7 @@ def broadcast(name: str) -> None:
 
 
 def _watchdog() -> None:
-    """Si voice_claude muere a mitad, no dejar el orbe clavado: vuelve a idle."""
+    """Si saga muere a mitad, no dejar el orbe clavado: vuelve a idle."""
     while True:
         time.sleep(10)
         with _lock:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""vc-ctl: control de los servidores de voice-claude.
+"""saga-ctl: control de los servidores de saga.
 
   vcctl.py stop     -> cierra los 4 daemons + borra sockets/tmp
   vcctl.py start    -> levanta los 4 daemons (hot, idle esperando 'claude')
@@ -29,13 +29,13 @@ DAEMONS = ("wake_daemon.py", "whisper_daemon.py", "claude_daemon.py", "orb_serve
 
 # Sockets + temporales a borrar en stop (sin tocar el beep, que se regenera).
 TMP_FILES = (
-    "/tmp/voice-claude-whisper.sock",
-    "/tmp/voice-claude-claude.sock",
-    "/tmp/voice-claude.pid",
-    "/tmp/voice-claude.lock",
-    "/tmp/voice-claude.abort",
-    "/tmp/voice-claude.wav",
-    "/tmp/voice-claude-lk-ctl.sock",   # socket de control del agente LiveKit (push-to-talk)
+    "/tmp/saga-whisper.sock",
+    "/tmp/saga-claude.sock",
+    "/tmp/saga.pid",
+    "/tmp/saga.lock",
+    "/tmp/saga.abort",
+    "/tmp/saga.wav",
+    "/tmp/saga-lk-ctl.sock",   # socket de control del agente LiveKit (push-to-talk)
 )
 
 
@@ -228,7 +228,7 @@ def _start_livekit() -> int:
     lk_ok = bool(_lk_agent_pids())
     print(f"start: agente LiveKit {'CORRIENDO' if lk_ok else f'NO arrancó -> revisá {LK_LOG}'}")
     print("start: USO -> Win+Z: 1) graba  2) corta y manda  3) mata. Silencio ~2s también manda.")
-    print("start:        Apagar todo: 'vc-ctl stop'. Modo clásico: VOICE_LIVEKIT=0.")
+    print("start:        Apagar todo: 'saga-ctl stop'. Modo clásico: VOICE_LIVEKIT=0.")
     return 0 if lk_ok else 1
 
 

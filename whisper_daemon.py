@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Daemon STT de Whisper: modelo caliente en RAM, atiende por socket Unix.
 
-voice_claude.py lo spawnea una vez (al empezar a grabar). transcribe() le manda
+saga.py lo spawnea una vez (al empezar a grabar). transcribe() le manda
 el path del wav y recibe el texto, sin pagar en CADA Win+Z ni el import de
 faster_whisper ni la recarga del modelo (~3s). Se autoapaga tras IDLE_TIMEOUT_S
 sin uso para no retener RAM indefinidamente en la APU.
 
 Protocolo (newline-delimited JSON sobre AF_UNIX):
-  req:  {"audio": "/tmp/voice-claude.wav", "lang": "es"}\n
+  req:  {"audio": "/tmp/saga.wav", "lang": "es"}\n
   resp: {"ok": true, "text": "..."}\n  |  {"ok": false, "error": "..."}\n
 """
 
@@ -23,11 +23,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from vc.config import WHISPER_DECODE
 
-SOCK_PATH = Path(os.environ.get("VOICE_WHISPER_SOCK", "/tmp/voice-claude-whisper.sock"))
+SOCK_PATH = Path(os.environ.get("VOICE_WHISPER_SOCK", "/tmp/saga-whisper.sock"))
 MODEL_SIZE = os.environ.get("VOICE_WHISPER_SIZE", "small")
 BEAM_SIZE = int(os.environ.get("VOICE_WHISPER_BEAM", "5"))
 IDLE_TIMEOUT_S = float(os.environ.get("VOICE_WHISPER_IDLE", "1800"))  # 30 min
-LOG_FILE = Path.home() / ".local/share/voice-claude/voice_claude.log"
+LOG_FILE = Path.home() / ".local/share/saga/saga.log"
 
 
 def log(msg: str) -> None:

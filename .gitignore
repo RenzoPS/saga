@@ -9,7 +9,7 @@ build/
 dist/
 
 # estado runtime / logs
-voice_claude.log*
+saga.log*
 livekit_agent.log*
 session.json
 .guard-settings.json
@@ -29,3 +29,5 @@ models/
 # artefactos de testing/visual (no van al repo)
 .playwright-mcp/
 orb-core-*.png
+graphify-out/
+.graphifyignore

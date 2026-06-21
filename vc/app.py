@@ -205,7 +205,7 @@ def _livekit_toggle() -> int:
         log("Win+Z -> press (LiveKit)")
         return 0
     except OSError as e:
-        log(f"Win+Z: agente LiveKit no responde ({type(e).__name__}); ¿corriste 'vc-ctl start'?")
+        log(f"Win+Z: agente LiveKit no responde ({type(e).__name__}); ¿corriste 'saga-ctl start'?")
         return 1
 
 

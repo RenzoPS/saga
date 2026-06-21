@@ -6,12 +6,12 @@ import json
 from pathlib import Path
 
 HOME = Path.home()
-PROJECT_DIR = HOME / ".local/share/voice-claude"
-PID_FILE = Path("/tmp/voice-claude.pid")
-LOCK_FILE = Path("/tmp/voice-claude.lock")
-ABORT_FILE = Path("/tmp/voice-claude.abort")  # pid del último owner abortado (detección de zombie)
-AUDIO_FILE = Path("/tmp/voice-claude.wav")
-LOG_FILE = PROJECT_DIR / "voice_claude.log"
+PROJECT_DIR = HOME / ".local/share/saga"
+PID_FILE = Path("/tmp/saga.pid")
+LOCK_FILE = Path("/tmp/saga.lock")
+ABORT_FILE = Path("/tmp/saga.abort")  # pid del último owner abortado (detección de zombie)
+AUDIO_FILE = Path("/tmp/saga.wav")
+LOG_FILE = PROJECT_DIR / "saga.log"
 
 EDGE_VOICE = "es-AR-ElenaNeural"  # Microsoft Edge TTS, voz argentina femenina
 EDGE_RATE = "+5%"  # ligeramente mas rapida
@@ -21,7 +21,7 @@ WHISPER_SIZE = os.environ.get("VOICE_WHISPER_SIZE", "small")  # small: preciso (
 WHISPER_BEAM = int(os.environ.get("VOICE_WHISPER_BEAM", "5"))  # beam5: búsqueda más amplia/robusta con small (preferencia del usuario). beam1 dispara loops
 # Daemon STT: mantiene el modelo caliente en RAM entre invocaciones (mata los ~3s
 # de recarga por Win+Z). transcribe() es cliente; si el daemon esta caido cae a inline.
-WHISPER_SOCK = Path("/tmp/voice-claude-whisper.sock")
+WHISPER_SOCK = Path("/tmp/saga-whisper.sock")
 WHISPER_DAEMON = PROJECT_DIR / "whisper_daemon.py"
 WHISPER_IDLE_S = 1800  # daemon se autoapaga tras 30 min sin uso
 # Params de decodificación de Whisper, UNA sola fuente (los usan el daemon y el
@@ -94,7 +94,7 @@ if _GUARD:
     CLAUDE_FAST_FLAGS = ["--settings", _GUARD] + CLAUDE_FAST_FLAGS
 # claude-mem en el daemon de voz: recall + captura por turno. PROBADO en vivo: el
 # hook de recall (antes de responder) infla el TTFT de ~2s a 4-7s -> demasiado para
-# voz. Default OFF (la velocidad gana). El transcript queda en voice_claude.log, así
+# voz. Default OFF (la velocidad gana). El transcript queda en saga.log, así
 # que lo importante se puede ingestar a demanda (sesión Claude -> Obsidian) sin pagar
 # latencia por turno. VOICE_CLAUDE_MEM=1 lo reactiva. Respawnear el daemon al cambiar.
 CLAUDE_MEM_ENABLED = os.environ.get("VOICE_CLAUDE_MEM", "0") == "1"
@@ -119,13 +119,15 @@ def build_claude_base_args(session_id: str, flag: str) -> list:
 
 # Daemon de Claude: proceso `claude` persistente (stream-json) que mantiene plugins
 # + sesión calientes entre turnos -> mata el cold-start (~5s) de spawnear el CLI cada vez.
-CLAUDE_SOCK = Path("/tmp/voice-claude-claude.sock")
+CLAUDE_SOCK = Path("/tmp/saga-claude.sock")
 CLAUDE_DAEMON = PROJECT_DIR / "claude_daemon.py"
 CLAUDE_DAEMON_IDLE_S = 3600  # el proceso claude se autoapaga tras 1h sin turnos
 CLAUDE_DAEMON_TURN_TIMEOUT_S = 180  # techo por turno: si claude se cuelga, matar+respawn (no trabar el daemon)
 
 # System prompt del asistente (constante -> se setea una vez al spawnear el daemon).
 CLAUDE_SYSTEM_PROMPT = (
+    "Te llamas Saga, el asistente de voz personal de Renzo. Si te preguntan tu nombre, sos Saga. "
+    "\n\n"
     "Estas hablando, no escribiendo. Tu respuesta sale por parlante (TTS multilingue "
     "que pronuncia bien anglicismos, numeros, simbolos y siglas; no te preocupes por fonetizar). "
     "\n\n"
@@ -156,30 +158,30 @@ AUTOSTOP_ON_MANUAL = os.environ.get("VOICE_AUTOSTOP", "1") != "0"
 # Modo LiveKit. Cuando está ON, el runtime de audio (captura, streaming, chunks, VAD,
 # turn detection, barge-in) lo maneja livekit-agents (lk/agent.py console) EN VEZ de
 # nuestro whisper_daemon + flujo Win+Z. Claude sigue siendo el cerebro y el orbe +
-# edge-tts se reusan. Default ON -> `vc-ctl start` levanta el agente LiveKit. Para
+# edge-tts se reusan. Default ON -> `saga-ctl start` levanta el agente LiveKit. Para
 # volver al modo clásico (Win+Z por-turno): VOICE_LIVEKIT=0. Ver lk/README.md.
 LIVEKIT_ENABLED = os.environ.get("VOICE_LIVEKIT", "1") != "0"
 LK_AGENT = PROJECT_DIR / "lk" / "agent.py"
 LK_LOG = PROJECT_DIR / "livekit_agent.log"
 # Socket de control: Win+Z (vc/app.py) le manda "toggle"/"on"/"off" al agente para
 # prender/apagar el mic (push-to-talk). Lo crea y escucha el proceso del agente.
-LK_CTL_SOCK = Path("/tmp/voice-claude-lk-ctl.sock")
+LK_CTL_SOCK = Path("/tmp/saga-lk-ctl.sock")
 
 # Secretos del proyecto (API keys). Archivo gitignored, cargado por el agente con
 # python-dotenv. NO es config seteable: el STT/TTS los decide el código (Deepgram por
 # default; si no hay key, cae solo a whisper/edge). Acá solo vive el secreto.
 ENV_FILE = PROJECT_DIR / ".env.local"
 
-MONITOR_CLASS = "voice-claude-monitor"
+MONITOR_CLASS = "saga-monitor"
 MONITOR_WORKSPACE = 10
 
-SCREENSHOT_PATH = Path("/tmp/voice-claude-screenshot.png")
+SCREENSHOT_PATH = Path("/tmp/saga-screenshot.png")
 
 # Adjunto IMAGEN pegado desde la pestaña del orbe. El navegador la manda por POST a orb_server,
 # que la escribe acá; el agente (lk/claude_llm) la lee en el turno como screenshot_path y la
 # borra (consume-once, mismo patrón dead-drop que SCREENSHOT_PATH). /tmp es tmpfs (RAM).
 # (El TEXTO ya NO va por archivo: se stagea en memoria del agente vía el socket de control.)
-ATTACH_IMG_PATH = Path("/tmp/voice-claude-attach.png")
+ATTACH_IMG_PATH = Path("/tmp/saga-attach.png")
 
 # Orbe visual: server SSE persistente en localhost, la pagina (orb/orb.html) se
 # sincroniza en vivo con la fase actual.
@@ -200,24 +202,22 @@ SESSION_FILE = PROJECT_DIR / "session.json"
 WAKE_ENABLED = os.environ.get("VOICE_WAKE_ENABLED", "0") == "1"
 
 # Wake word: daemon Vosk que escucha el mic en continuo y dispara el flujo al oir
-# "claude" (o variantes que el STT chico confunde). Local, sin cuenta, sin training.
+# "saga" (o variantes que el STT chico confunde). Local, sin cuenta, sin training.
+# Ventaja sobre "claude": "saga" SI esta en el lexico ES -> Vosk la reconoce nativo.
 WAKE_MODEL_DIR = PROJECT_DIR / "models" / "vosk-model-small-es-0.42"
-WAKE_BEEP_FILE = Path("/tmp/voice-claude-beep.wav")  # se genera una vez al arrancar el daemon
+WAKE_BEEP_FILE = Path("/tmp/saga-beep.wav")  # se genera una vez al arrancar el daemon
 # Vosk con GRAMMAR restringida: el recognizer DEBE mapear el audio a una de estas
-# frases o a "[unk]" (que absorbe todo lo demás y queda mudo). Medido en vivo: el
-# recognizer libre escupe basura ('law','icloud','grau') para "claude", pero con
-# grammar clava "claude"/"hey claude" y queda mudo en charla normal (casi 0 falsos +).
-# "claude" no está en el léxico ES pero Vosk lo acepta en grammar igual; "claudio/
-# claudia" sí están y atrapan las veces que el AM lo desvía a esos nombres.
-# "claudio"/"claudia" quedan como SEÑUELOS: están en la grammar para darle a Vosk
+# frases o a "[unk]" (que absorbe todo lo demás y queda mudo). Con grammar clava
+# "saga"/"hey saga" y queda mudo en charla normal (casi 0 falsos +).
+# "zaga"/"saca" quedan como SEÑUELOS: están en la grammar para darle a Vosk
 # dónde rutear los casi-match (audio del sistema, ruido, voz lejana) en vez de
-# forzarlos a "claude". NO disparan -> ver WAKE_TRIGGER_PHRASES.
-WAKE_GRAMMAR = ("claude", "hey claude", "claudio", "claudia", "[unk]")
+# forzarlos a "saga". NO disparan -> ver WAKE_TRIGGER_PHRASES.
+WAKE_GRAMMAR = ("saga", "hey saga", "zaga", "saca", "[unk]")
 # Dispara SOLO si el texto FINAL completo es EXACTAMENTE una de estas frases. Match
-# de frase entera, no substring: 'claudia'/'claudio'/'claude algo'/'la nube claude' NO
-# levantan. 'claudia'/'claudio' siguen en WAKE_GRAMMAR como señuelos: absorben el ruido
-# parecido (lo rutean ahí en vez de a 'claude'), pero al no estar acá, no disparan.
-WAKE_TRIGGER_PHRASES = ("claude", "hey claude")
+# de frase entera, no substring: 'zaga'/'saca'/'saga algo'/'la saga esa' NO
+# levantan. 'zaga'/'saca' siguen en WAKE_GRAMMAR como señuelos: absorben el ruido
+# parecido (lo rutean ahí en vez de a 'saga'), pero al no estar acá, no disparan.
+WAKE_TRIGGER_PHRASES = ("saga", "hey saga")
 # Confianza mínima (la palabra más floja del match, 0..1) para aceptar el wake. Vosk solo
 # da conf en resultados FINALES. Subir si vuelven los falsos +, bajar si cuesta levantar.
 # Arranca permisivo; tunear con las líneas 'final candidato' del log.

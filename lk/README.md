@@ -18,7 +18,7 @@ enchufamos STT/cerebro/TTS. Ver el `README.md` de la raíz para el panorama comp
 
 ## Correr
 ```bash
-vc-ctl start                              # recomendado (lo gestiona vcctl)
+saga-ctl start                              # recomendado (lo gestiona vcctl)
 .venv/bin/python lk/agent.py console      # directo (audio local, sin servidor)
 ```
 

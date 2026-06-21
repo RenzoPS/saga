@@ -1,4 +1,4 @@
-# voice-claude
+# saga
 
 Asistente de voz para Linux/Hyprland: **voz → Claude Code → voz**, sobre **LiveKit**
 (runtime de audio) + **Deepgram** (STT/TTS), con un orbe 3D que reacciona al estado.
@@ -29,7 +29,7 @@ STT ~0.3s · Claude TTFT ~2s · TTS ttfb ~0.3s → **~2-3s de "callaste" a "te h
 - **`DEEPGRAM_API_KEY`** en `.env.local` (cuenta free de deepgram.com; gitignored).
   Sin la key, cae solo a fallback local (faster-whisper + edge-tts, más lento).
 - Binarios: `claude` (CLI), `mpg123`, `grim` (screenshot), `hyprctl`/`kitty`/`xdg-open`.
-- Hotkey: bind de Hyprland a `~/.local/bin/voice-claude` (Win+Z).
+- Hotkey: bind de Hyprland a `~/.local/bin/saga` (Win+Z).
 
 ## Setup
 
@@ -41,9 +41,9 @@ echo 'DEEPGRAM_API_KEY=tu_key' > .env.local      # gitignored, NO se commitea
 ## Correr
 
 ```bash
-vc-ctl start      # levanta el agente LiveKit + Claude + orbe + monitor
-vc-ctl status     # ver modo, stack (Deepgram vs fallback) y daemons
-vc-ctl stop       # apagar todo
+saga-ctl start      # levanta el agente LiveKit + Claude + orbe + monitor
+saga-ctl status     # ver modo, stack (Deepgram vs fallback) y daemons
+saga-ctl stop       # apagar todo
 ```
 
 ### Uso (Win+Z, push-to-talk de 3 fases)
@@ -92,7 +92,7 @@ Soporte (paquete `vc/`, reusado): `config` (paths/flags/secretos) · `claudecli`
 `desktop` (grim/Hyprland) · `runtime` · `session`. El flujo clásico (`vc/app.py`,
 `whisper_daemon.py`, wake `Vosk`) queda como fallback (`VOICE_LIVEKIT=0`).
 
-Control: `vcctl.py` (`vc-ctl`) lanza el agente, abre el monitor y espera readiness.
+Control: `vcctl.py` (`saga-ctl`) lanza el agente, abre el monitor y espera readiness.
 Win+Z (`vc/app.py` → `_livekit_toggle`) le manda `press` al socket del agente.
 
 ## Privacidad

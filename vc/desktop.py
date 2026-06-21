@@ -49,7 +49,7 @@ def ensure_monitor_open() -> None:
         log(f"hyprctl clients fail: {type(e).__name__}: {e}")
     cmd = (
         f"[workspace {MONITOR_WORKSPACE}] "
-        f"kitty --class {MONITOR_CLASS} --title 'voice-claude monitor' "
+        f"kitty --class {MONITOR_CLASS} --title 'saga monitor' "
         f"-e tail -n 80 -F {LOG_FILE}"
     )
     subprocess.Popen(

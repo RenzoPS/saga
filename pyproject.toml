@@ -3,7 +3,7 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "voice-claude"
+name = "saga"
 version = "0.1.0"
 description = "Asistente de voz Linux/Hyprland: voz -> Claude Code -> voz, sobre LiveKit + Deepgram, con orbe 3D reactivo."
 readme = "README.md"
@@ -28,10 +28,10 @@ dependencies = [
 ]
 
 # Comandos instalados (reemplazan a los wrappers hechos a mano en ~/.local/bin).
-# Tras `pip install -e .` quedan en .venv/bin/voice-claude y .venv/bin/vc-ctl.
+# Tras `pip install -e .` quedan en .venv/bin/saga y .venv/bin/saga-ctl.
 [project.scripts]
-voice-claude = "vc.app:main"
-vc-ctl = "vcctl:main"
+saga = "vc.app:main"
+saga-ctl = "vcctl:main"
 
 [tool.setuptools]
 # El paquete es vc/. Los entry-point scripts de raíz (daemons) se siguen lanzando por

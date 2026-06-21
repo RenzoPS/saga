@@ -1,1 +1,1 @@
-"""voice-claude: voz -> Claude Code -> voz. Paquete modular."""
+"""saga: voz -> Claude Code -> voz. Paquete modular."""

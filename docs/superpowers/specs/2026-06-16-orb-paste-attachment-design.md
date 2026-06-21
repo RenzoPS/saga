@@ -32,7 +32,7 @@ sentido (agente → `POST /state` → SSE → browser). Para que el contenido pe
 agente **no se agrega ningún canal nuevo**: se encuentran en archivos `/tmp`.
 
 - El **navegador** captura el paste y lo manda a `orb_server` por HTTP.
-- `orb_server` **escribe** el adjunto en `/tmp/voice-claude-attach.{txt,png}`.
+- `orb_server` **escribe** el adjunto en `/tmp/saga-attach.{txt,png}`.
 - El **agente** lo **lee y borra** en el turno (`lk/claude_llm.py`), exactamente donde hoy
   mete el screenshot de `grim`.
 
@@ -68,7 +68,7 @@ El POST ocurre en reposo (antes de hablar) → **cero impacto en la latencia de 
 
 | Archivo | Cambio |
 |---|---|
-| `vc/config.py` | Constantes `ATTACH_TEXT_PATH = /tmp/voice-claude-attach.txt` y `ATTACH_IMG_PATH = /tmp/voice-claude-attach.png` (al lado de `SCREENSHOT_PATH`). |
+| `vc/config.py` | Constantes `ATTACH_TEXT_PATH = /tmp/saga-attach.txt` y `ATTACH_IMG_PATH = /tmp/saga-attach.png` (al lado de `SCREENSHOT_PATH`). |
 | `vc/attach.py` *(nuevo, ~30 líneas)* | `has_staged() -> bool`, `take_staged() -> tuple[str\|None, Path\|None]` (lee ambos tmp, los borra, devuelve contenido). IO puro → testeable con `unittest`. |
 | `orb/orb_server.py` | Endpoint `POST /attach?kind=text\|image`: lee el body, **overwrite** del tmp (body vacío → borra), responde 204. Importa las paths de `vc.config` (con `sys.path.insert` del root, igual que los demás daemons del repo). Agrega `attach` a `VALID_STATES`. |
 | `orb/orb.html` | (1) Panel **centrado** con backdrop que difumina+opaca el orbe; se abre solo al llevar el mouse al borde inferior; textarea + chip de imagen, **sin botones** (autoguardado). (2) Captura `paste` (texto y/o imagen). (3) Cierre con Enter/Esc/clic afuera. (4) Estado nuevo `attach` en la tabla `PH` (magenta) + `TRANSIENT`. (5) Animación de absorción (`absorbV`, espeja `flashV`). (6) Indicador "armado" sutil. (7) Limpieza de la UI al estado `rec` (`window.__attachTurnStart`). |

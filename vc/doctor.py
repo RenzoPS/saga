@@ -1,4 +1,4 @@
-"""Health check: `voice_claude.py --doctor`. Read-only, no toca el flujo de voz.
+"""Health check: `saga.py --doctor`. Read-only, no toca el flujo de voz.
 Verifica binarios, deps, daemons, config -> dice qué falla en vez de adivinar."""
 
 import shutil
@@ -39,7 +39,7 @@ def doctor() -> int:
     def line(mark, label, detail=""):
         print(f"  {mark} {label}{('  — ' + detail) if detail else ''}")
 
-    print("\nvoice-claude doctor\n")
+    print("\nsaga doctor\n")
 
     # --- binarios del sistema (críticos: claude; resto importante) ---
     print("Binarios:")

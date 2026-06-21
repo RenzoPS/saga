@@ -3,7 +3,7 @@
 vivo entre turnos -> plugins + sesión calientes -> mata el cold-start (~5s) que
 se pagaba al spawnear el CLI en cada Win+Z.
 
-voice_claude (efímero) es CLIENTE: manda el turno por socket Unix y recibe los
+saga (efímero) es CLIENTE: manda el turno por socket Unix y recibe los
 text_delta. Si este daemon no está, el cliente cae al spawn one-shot de siempre.
 
 Protocolo socket (newline-delimited JSON):

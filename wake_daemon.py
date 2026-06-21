@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Wake-word daemon: escucha el mic en continuo con Vosk (local, offline) y dispara
-el flujo de voice-claude al oir "claude". Al disparar: beep (= "tu turno, grabando")
-y corre UN turno (voice_claude.py en modo wake, estilo Alexa): graba un comando con
+el flujo de saga al oir "claude". Al disparar: beep (= "tu turno, grabando")
+y corre UN turno (saga.py en modo wake, estilo Alexa): graba un comando con
 auto-stop por silencio, Claude responde, y vuelve a escuchar "claude". No multi-turno.
 
 El mic está abierto SIEMPRE mientras corre este daemon (necesario para el wake word),
@@ -28,7 +28,7 @@ from vc.config import (  # noqa: E402
 )
 from vc.sound import ensure_beep, play_beep  # noqa: E402
 
-VOICE_CLAUDE = PROJECT_DIR / "voice_claude.py"
+VOICE_CLAUDE = PROJECT_DIR / "saga.py"
 
 import sounddevice as sd  # noqa: E402
 from vosk import Model, KaldiRecognizer, SetLogLevel  # noqa: E402
@@ -63,8 +63,8 @@ def _wake_match(result: dict):
 
 
 def _run_flow(wake_word: str) -> None:
-    """Lanza voice_claude en modo wake: UN turno con auto-stop por silencio (sin Win+Z
-    para cortar). BLOQUEA hasta que termina: así el mic queda libre para voice_claude y
+    """Lanza saga en modo wake: UN turno con auto-stop por silencio (sin Win+Z
+    para cortar). BLOQUEA hasta que termina: así el mic queda libre para saga y
     el daemon no re-escucha mientras corre. `wake_word` = la palabra que disparó el beep;
     se pasa por env para que el monitor (consola del log) muestre con qué arrancó."""
     env = dict(os.environ, VOICE_WAKE_AUTOSTOP="1", VOICE_WAKE_WORD=wake_word)
