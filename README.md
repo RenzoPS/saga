@@ -4,9 +4,10 @@ Asistente de voz para Linux/Hyprland: **voz → Claude Code → voz**, sobre **L
 (runtime de audio) + **Deepgram** (STT/TTS), con un orbe 3D que reacciona al estado.
 Push-to-talk con Win+Z.
 
-Por default corre en **modo room**: un server LiveKit local (binario nativo) + el browser
-como cliente (orbe) que publica el mic y reproduce el TTS + un worker (el cerebro). Hay
-fallbacks: transporte `console` (audio local, sin server) y flujo clásico (whisper/edge).
+Corre en **modo room** (único, estándar): un server LiveKit local (binario nativo) + el browser
+como cliente (orbe) que publica el mic y reproduce el TTS + un worker (el cerebro). Con
+`DEEPGRAM_API_KEY` el STT/TTS es Deepgram; sin key cae al fallback local (whisper + edge-tts),
+dentro del agente.
 
 ## Flujo
 
@@ -86,7 +87,7 @@ LIVEKIT_API_SECRET=secretoxxxxxxxx
 EOF
 ```
 Sin la key de Deepgram, cae a fallback local (faster-whisper + edge-tts, más lento).
-Sin las keys de LiveKit, el modo room no arranca (usá `SAGA_TRANSPORT=console`).
+Las keys de LiveKit son necesarias: sin ellas el server no arranca.
 
 **5. Comandos globales** (wrappers en `~/.local/bin`, para no activar el venv a mano).
 El keybind de Hyprland los necesita por ruta absoluta:
@@ -109,7 +110,7 @@ bindd = $mainMod, Z, Saga (toggle), exec, /home/TU_USUARIO/.local/bin/saga
 ```
 Después `hyprctl reload`.
 
-> Wake word "saga"/"hey saga": OFF por default (`VOICE_WAKE_ENABLED=1` para activar; requiere el modelo Vosk en `models/`). El trigger normal es Win+Z.
+> Wake word "hey saga": OFF por default (`SAGA_WAKE_ENABLED=1` para activar; corre en el server sobre el track del mic, U4). El trigger normal es Win+Z.
 
 ## Correr
 
@@ -155,15 +156,17 @@ Toggles:
 
 | Var | Default | Qué hace |
 |-----|---------|----------|
-| `SAGA_TRANSPORT` | `room` | `=console` corre el worker con audio local (sin server ni browser) |
-| `VOICE_LIVEKIT` | `1` (on) | `=0` vuelve al flujo clásico (Win+Z por-turno, whisper/edge) |
+| `SAGA_WAKE_ENABLED` | `0` (off) | `=1` activa el wake "hey saga" en el server (sobre el track del mic) |
 | `VOICE_CLAUDE_SAFE` | (off) | `=1` desactiva `--dangerously-skip-permissions` |
 | `VOICE_CLAUDE_MEM` | `0` (off) | `=1` activa claude-mem en voz (+2-7s/turno; respawnear daemon) |
 | `ORB_PORT` | `8777` | puerto del server del orbe |
 
+El stack STT/TTS NO es un toggle: lo decide la presencia de `DEEPGRAM_API_KEY` (Deepgram) o su
+ausencia (fallback faster-whisper + edge-tts, dentro del agente).
+
 ## Arquitectura
 
-Modo room (default) — topología **server LiveKit ↔ browser cliente (orbe) ↔ worker**, todo local:
+Modo room (único) — topología **server LiveKit ↔ browser cliente (orbe) ↔ worker**, todo local:
 
 - **Server**: `livekit-server` nativo (`~/.local/bin/`), config `livekit.yaml`. Signaling en
   loopback (`:7880`), media UDP en `:7882`. `saga-ctl` auto-detecta `NODE_IP` (IP de LAN) e
@@ -180,24 +183,24 @@ Paquete `lk/` (worker):
 
 | Módulo | Responsabilidad |
 |--------|-----------------|
-| `lk/agent.py` | entrypoint: `lk/agent.py start` (worker room) / `console` (fallback); arma `AgentSession`, 3 fases Win+Z, socket de control |
+| `lk/agent.py` | entrypoint: `lk/agent.py start` (worker room); arma `AgentSession`, 3 fases Win+Z, socket de control, wake-on-track |
 | `lk/claude_llm.py` | LLM custom de LiveKit que delega en `claude_daemon` (+ visión grim) |
 | `lk/whisper_stt.py` | STT de fallback (faster-whisper) si no hay Deepgram |
 | `lk/edge_tts_plugin.py` | TTS de fallback (edge-tts) si no hay Deepgram |
 
-Soporte (paquete `vc/`, reusado): `config` (paths/flags/secretos) · `claudecli` +
+Soporte (paquete `vc/`, reusado): `config` (paths/secretos) · `claudecli` +
 `claude_daemon.py` (cerebro caliente) · `orb` + `orb/orb_server.py` (orbe + `/token`) ·
-`desktop` (grim/Hyprland) · `runtime` · `session`. El flujo clásico (`vc/app.py`,
-`whisper_daemon.py`, wake `Vosk`) queda como fallback (`VOICE_LIVEKIT=0`).
+`desktop` (grim/Hyprland) · `runtime` · `session`. (`wake_daemon.py`/Vosk queda dormido,
+fuera de scope.)
 
 Control: `vcctl.py` (`saga-ctl`) orquesta el arranque (`_start_room`: server → daemon →
 orbe → worker → dispatch → browser), abre el monitor y espera readiness por pieza. Win+Z
-(`vc/app.py` → `_livekit_toggle`) le manda `press` al socket del agente.
+(`vc/app.py` → `_livekit_press`) le manda `press` al socket del agente.
 
 ## Privacidad
 
 En modo Deepgram, el audio del mic viaja a Deepgram en streaming (precio de la
 velocidad). El server LiveKit es local y su signaling bindea solo a loopback (nadie
 externo pide token ni se une). Las keys viven en `.env.local` (gitignored). Las capturas
-de pantalla se borran inmediatamente tras mandarlas a Claude. Para todo-local
-(STT/TTS sin Deepgram): `VOICE_LIVEKIT=0`.
+de pantalla se borran inmediatamente tras mandarlas a Claude. Para todo-local (sin que el
+audio salga a la nube): no pongas `DEEPGRAM_API_KEY` → STT/TTS corren con el fallback local.

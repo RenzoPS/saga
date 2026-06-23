@@ -17,7 +17,7 @@ nativo local; el audio entra/sale por el track del browser (cliente orbe). Ver e
 - TTS: `deepgram.TTS("aura-2-gloria-es")` — voz española neutra (constante `_DEEPGRAM_VOICE`).
 - VAD: `silero.VAD.load(activation_threshold=0.7)` — sube el piso para que el mic de laptop ignore ruido de fondo.
 - Fin de turno: turn detector **SEMÁNTICO** `MultilingualModel` (livekit-plugins-turn-detector), no solo silencio. Cierra el turno por el SENTIDO de la frase → anti-chopping en frases con pausas.
-- Ruido (BVC `noise_cancellation`): **solo en console** (requiere LiveKit Cloud). En room se apoya en el VAD Silero; intentar habilitar BVC contra el server self-hosted falla al aplicarse, por eso se gatea por modo.
+- Ruido: en room se apoya en el VAD Silero (activation_threshold 0.7). BVC (`noise_cancellation`) NO se usa: requiere LiveKit Cloud y falla al aplicarse contra el server self-hosted.
 
 ### Config de turnos (`turn_handling`)
 TODA la config de turnos va DENTRO del dict `turn_handling` de `AgentSession`. Los params
@@ -32,19 +32,16 @@ ignoran** cuando se pasa `turn_handling`.
 ```bash
 saga-ctl start                            # recomendado (lanza el worker + monitor + crea el dispatch)
 .venv/bin/python lk/agent.py start        # room directo (usa LIVEKIT_URL/API_KEY/API_SECRET de .env.local)
-.venv/bin/python lk/agent.py console      # fallback dev: audio local, sin servidor
 ```
 
-### Transporte: ROOM (default) vs CONSOLE (fallback)
-El modo lo decide el **subcomando**, no un flag:
-- **`start`/`dev` → ROOM** (default, Ciclo 4): worker headless conectado al livekit-server local. El audio entra por el track del BROWSER (cliente orbe) y el TTS sale por el mismo room. El track detached DESCARTA frames → sin backlog (resuelve el bug del buffer del modo console). El wake corre en el CLIENTE (onnxruntime-web, U4); el worker no escucha mic local.
-- **`console` → CONSOLE** (fallback dev): runtime de audio local del proceso, sin server. El wake server-side (mic local, opt-in `SAGA_WAKE_ENABLED=1`) SÍ corre acá. Tiene el bug del buffer conocido (Ciclo 3).
+### Transporte: ROOM (único)
+Worker headless conectado al livekit-server local. El audio entra por el track del BROWSER (cliente orbe) y el TTS sale por el mismo room. El track detached DESCARTA frames → sin backlog. El wake (opt-in `SAGA_WAKE_ENABLED=1`, U4) corre en el SERVER sobre el track del mic (`WakeWordTrackDetector`), reusando el modelo Python.
 
 ### Dispatch EXPLÍCITO (room)
 El worker se registra como agente NOMBRADO: `@server.rtc_session(agent_name="saga")`
 (`LIVEKIT_AGENT_NAME`). **No** hay auto-dispatch: `saga-ctl`/`vcctl` hace
 `create_dispatch` (CreateAgentDispatchRequest) para asignar el agente al room. Robustece
-contra el orden de arranque y pestañas zombie. En console (sin server) se ignora.
+contra el orden de arranque y pestañas zombie.
 
 ## Win+Z (3 fases, vía socket de control LK_CTL_SOCK)
 Máquina de 3 fases (`idle`/`rec`/`busy`): idle→graba · rec→corta y manda (`commit_user_turn`) ·
@@ -62,9 +59,9 @@ Implementados con `asyncio.call_later` (herramientas estándar), reemplazan los 
 - `stage`: texto del textarea (autosave) → staged en memoria del agente (`vc/attach`), consumido en el turno.
 
 ## Orbe sincronizado (U5)
-En room el cliente browser sincroniza el orbe con la **voz real**: Web Audio `AnalyserNode`
-sobre el track TTS remoto → nivel RMS en vivo. En console era imposible (audio en otro
-proceso). El estado (idle/think/speak/…) sigue llegando por SSE desde `orb_server`.
+El cliente browser sincroniza el orbe con la **voz real**: Web Audio `AnalyserNode`
+sobre el track TTS remoto → nivel RMS en vivo. El estado (idle/think/speak/…) sigue
+llegando por SSE desde `orb_server`.
 
 ## Notas
 - Los plugins (deepgram/silero/noise-cancellation/turn-detector) se importan a NIVEL MÓDULO (se registran en el main thread; importarlos tarde crashea).

@@ -24,8 +24,9 @@ from pathlib import Path
 PROJ = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJ))
 
-# Los 4 servidores. Se matchea por basename del .py en el cmdline.
-DAEMONS = ("wake_daemon.py", "whisper_daemon.py", "claude_daemon.py", "orb_server.py")
+# Servidores que se matchean por basename del .py en el cmdline. wake_daemon (Vosk) queda
+# en la lista para que `stop` lo baje si alguna vez corre, pero está dormido (fuera de scope).
+DAEMONS = ("wake_daemon.py", "claude_daemon.py", "orb_server.py")
 
 # Sockets + temporales a borrar en stop (sin tocar el beep, que se regenera).
 TMP_FILES = (
@@ -73,7 +74,7 @@ def _alive(pid: int) -> bool:
 
 
 def _lk_agent_pids() -> "dict[int, str]":
-    """pid -> 'lk/agent.py' para el agente LiveKit (lk/agent.py console).
+    """pid -> 'lk/agent.py' para el worker LiveKit (lk/agent.py start).
     Match preciso: la ruta absoluta del script en el argv (lo lanzamos así). Fallback
     por sufijo 'lk/agent.py' por si alguien lo corre con ruta relativa."""
     from vc.config import LK_AGENT
@@ -272,66 +273,6 @@ def _has_deepgram() -> bool:
         return False
 
 
-def _start_livekit() -> int:
-    """Modo LiveKit: el agente (lk/agent.py console) es dueño del audio/streaming/
-    chunks/VAD/turn detection/barge-in Y de levantar el orbe + precalentar Claude
-    (single-owner: lo hace SOLO el agente, no acá -> sin doble-spawn). vcctl sólo
-    lanza el agente, abre el monitor, y espera readiness."""
-    import subprocess
-    from vc.config import CLAUDE_SOCK, ORB_PORT, LK_AGENT, LK_LOG
-    from vc.desktop import ensure_monitor_open
-
-    dg = _has_deepgram()
-    print("=" * 60)
-    print("start: MODO LIVEKIT ACTIVO  (VOICE_LIVEKIT=1)")
-    print("  audio / streaming / chunks / VAD / barge-in -> LiveKit")
-    print("  cerebro -> Claude Code")
-    if dg:
-        print("  STT -> Deepgram Nova-3 (streaming)   |   voz -> Deepgram Aura-2 (es)")
-    else:
-        print("  STT -> faster-whisper local (lento)  |   voz -> edge-tts   [SIN key Deepgram]")
-    print("  Win+Z: graba / corta y manda / mata. Silencio ~2s también manda.")
-    print("=" * 60)
-
-    ensure_monitor_open()   # consola de debug (kitty con tail del log). El agente levanta orbe+claude.
-
-    running = _lk_agent_pids()
-    if running:
-        print(f"start: agente LiveKit YA corría (pid {sorted(running)})")
-    else:
-        try:
-            logf = open(LK_LOG, "ab")   # el hijo hereda el fd; el padre sale enseguida
-            subprocess.Popen(
-                [sys.executable, str(LK_AGENT), "console"],
-                stdin=subprocess.DEVNULL, stdout=logf, stderr=logf,
-                start_new_session=True,
-            )
-            print(f"start: agente LiveKit lanzado  (log: {LK_LOG})")
-        except OSError as e:
-            print(f"start: NO pude lanzar el agente LiveKit: {e}")
-            return 1
-
-    # readiness: cerebro + orbe (el whisper vive dentro del agente, no hay socket que probar)
-    for name, probe, timeout in (
-        ("claude", lambda: _sock_up(str(CLAUDE_SOCK)), 30),
-        ("orb", lambda: _port_up(ORB_PORT), 10),
-    ):
-        ok = False
-        for _ in range(int(timeout / 0.25)):
-            if probe():
-                ok = True
-                break
-            time.sleep(0.25)
-        print(f"start: {name} {'HOT' if ok else 'NO levantó a tiempo (revisá el log)'}")
-
-    time.sleep(1.0)   # darle al agente un momento para crashear si va a crashear
-    lk_ok = bool(_lk_agent_pids())
-    print(f"start: agente LiveKit {'CORRIENDO' if lk_ok else f'NO arrancó -> revisá {LK_LOG}'}")
-    print("start: USO -> Win+Z: 1) graba  2) corta y manda  3) mata. Silencio ~2s también manda.")
-    print("start:        Apagar todo: 'saga-ctl stop'. Modo clásico: VOICE_LIVEKIT=0.")
-    return 0 if lk_ok else 1
-
-
 def _start_room() -> int:
     """Modo ROOM (Ciclo 4): levanta el server LiveKit NATIVO + cerebro + orbe + worker, y abre
     el browser cliente. Orden con readiness por pieza. El worker (lk/agent.py start) se registra
@@ -349,7 +290,7 @@ def _start_room() -> int:
 
     dg = _has_deepgram()
     print("=" * 60)
-    print("start: MODO ROOM  (SAGA_TRANSPORT=room)")
+    print("start: saga (LiveKit room)")
     print("  server LiveKit local (nativo) + browser cliente publica mic / recibe TTS")
     print("  cerebro -> Claude Code")
     print("  STT/voz -> " + ("Deepgram Nova-3 + Aura-2" if dg else "whisper local + edge-tts [SIN key]"))
@@ -360,7 +301,7 @@ def _start_room() -> int:
     # 1) server nativo (NODE_IP auto-detectado; keys de .env.local)
     if not LIVEKIT_SERVER_BIN.exists():
         print(f"start: NO existe el binario {LIVEKIT_SERVER_BIN}")
-        print("start: bajalo (release oficial de livekit/livekit) o usá SAGA_TRANSPORT=console")
+        print("start: bajalo (release oficial de livekit/livekit) a ~/.local/bin/livekit-server")
         return 1
     if _livekit_server_pids():
         print(f"start: livekit-server YA corría (pid {sorted(_livekit_server_pids())})")
@@ -444,100 +385,39 @@ def _start_room() -> int:
     except OSError:
         print(f"start: abrí el orbe a mano -> {ORB_URL}")
     print("start: USO -> Win+Z: graba / corta y manda / mata. Silencio ~2s también manda.")
-    print("start:        Apagar todo: 'saga-ctl stop'. Fallback sin server: SAGA_TRANSPORT=console.")
+    print("start:        Apagar todo: 'saga-ctl stop'.")
     return 0 if worker_ok else 1
 
 
 def start() -> int:
-    import subprocess
-    from vc.config import WHISPER_SOCK, CLAUDE_SOCK, ORB_PORT, WAKE_ENABLED, LIVEKIT_ENABLED, SAGA_TRANSPORT
-    from vc.stt import prewarm_whisper
-    from vc.claudecli import prewarm_claude
-    from vc.orb import ensure_orb
-
-    if LIVEKIT_ENABLED:
-        return _start_room() if SAGA_TRANSPORT == "room" else _start_livekit()
-
-    running = {s: p for p, s in _daemon_pids().items()}
-
-    # 1) wake_daemon (el listener). Default DESACTIVADO -> el trigger es Win+Z.
-    # El código del daemon queda intacto; VOICE_WAKE_ENABLED=1 lo vuelve a lanzar.
-    if not WAKE_ENABLED:
-        print("start: wake DESACTIVADO (trigger = Win+Z; VOICE_WAKE_ENABLED=1 para reactivar)")
-    elif "wake_daemon.py" in running:
-        print(f"start: wake_daemon ya corría (pid {running['wake_daemon.py']})")
-    else:
-        subprocess.Popen(
-            [sys.executable, str(PROJ / "wake_daemon.py")],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
-        print("start: wake_daemon lanzado")
-
-    # 2) whisper / claude / orb: idéntico a como los spawnea el flujo (dedup-safe).
-    prewarm_whisper()
-    prewarm_claude()
-    ensure_orb()
-
-    # 3) esperar a que queden HOT (best-effort, con timeout).
-    checks = (
-        ("whisper", lambda: _sock_up(str(WHISPER_SOCK)), 25),
-        ("claude", lambda: _sock_up(str(CLAUDE_SOCK)), 30),
-        ("orb", lambda: _port_up(ORB_PORT), 10),
-    )
-    for name, probe, timeout in checks:
-        ok = False
-        for _ in range(int(timeout / 0.25)):
-            if probe():
-                ok = True
-                break
-            time.sleep(0.25)
-        print(f"start: {name} {'HOT' if ok else 'NO levantó a tiempo (revisá el log)'}")
-
-    if not WAKE_ENABLED:
-        print("start: listo (wake desactivado, Win+Z andando)")
-        return 0
-    wake_ok = "wake_daemon.py" in _daemon_pids().values()
-    print(f"start: wake {'escuchando' if wake_ok else 'NO corriendo'}")
-    return 0 if wake_ok else 1
+    """Único modo: LiveKit room (server nativo + browser cliente). Lo levanta _start_room()."""
+    return _start_room()
 
 
 def status() -> int:
-    from vc.config import WHISPER_SOCK, CLAUDE_SOCK, ORB_PORT, LIVEKIT_ENABLED, SAGA_TRANSPORT, LIVEKIT_SIGNAL_PORT
-    transporte = (f"LIVEKIT/{SAGA_TRANSPORT}" if LIVEKIT_ENABLED else "clásico (Win+Z)")
-    print(f"=== modo === {transporte}")
+    from vc.config import CLAUDE_SOCK, ORB_PORT, LIVEKIT_SIGNAL_PORT
+    print("=== modo === LiveKit / room")
     dg = _has_deepgram()
     print(f"  STT / TTS          {'Deepgram Nova-3 + Aura-2 (key OK)' if dg else 'whisper local + edge-tts (SIN key)'}")
-    if LIVEKIT_ENABLED and SAGA_TRANSPORT == "room":
-        srv = _livekit_server_pids()
-        up = _port_up(LIVEKIT_SIGNAL_PORT)
-        print(f"  livekit-server     {('UP ' + str(sorted(srv))) if srv else 'DOWN'}  (:{LIVEKIT_SIGNAL_PORT} {'UP' if up else 'down'})")
+    srv = _livekit_server_pids()
+    up = _port_up(LIVEKIT_SIGNAL_PORT)
+    print(f"  livekit-server     {('UP ' + str(sorted(srv))) if srv else 'DOWN'}  (:{LIVEKIT_SIGNAL_PORT} {'UP' if up else 'down'})")
     lk = _lk_agent_pids()
     print(f"  agente/worker LK   {'UP ' + str(sorted(lk)) if lk else 'DOWN'}")
     pids = _daemon_pids()
-    # En modo LiveKit, whisper_daemon y wake_daemon NO se usan (el Whisper vive dentro
-    # del agente; no hay wake). Se marcan "n/a" para no confundir con un fallo.
-    # whisper_daemon: en LiveKit con Deepgram NO se usa (STT en la nube); whisper sólo
-    # es fallback dentro del agente si falta la key. wake_daemon: no aplica.
-    na = {"whisper_daemon.py", "wake_daemon.py"} if LIVEKIT_ENABLED else set()
+    # wake_daemon (Vosk) está dormido (fuera de scope) -> no aplica al flujo room.
+    na = {"wake_daemon.py"}
     print("=== daemons ===")
     for script in DAEMONS:
         live = [p for p, s in pids.items() if s == script]
         if live:
             state = "UP " + str(live)
         elif script in na:
-            state = "—   (no aplica en modo LiveKit)"
+            state = "—   (Vosk dormido, fuera de scope)"
         else:
             state = "DOWN"
         print(f"  {script:18} {state}")
     print("=== readiness ===")
-    if _sock_up(str(WHISPER_SOCK)):
-        wsock = "UP"
-    elif LIVEKIT_ENABLED:
-        wsock = "n/a (STT=Deepgram)" if dg else "n/a (whisper en el agente)"
-    else:
-        wsock = "down"
-    print(f"  whisper.sock  {wsock}")
     print(f"  claude.sock   {'UP' if _sock_up(str(CLAUDE_SOCK)) else 'down'}")
     print(f"  orb :{ORB_PORT}     {'UP' if _port_up(ORB_PORT) else 'down'}")
     return 0

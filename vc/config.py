@@ -9,8 +9,6 @@ HOME = Path.home()
 PROJECT_DIR = HOME / ".local/share/saga"
 PID_FILE = Path("/tmp/saga.pid")
 LOCK_FILE = Path("/tmp/saga.lock")
-ABORT_FILE = Path("/tmp/saga.abort")  # pid del último owner abortado (detección de zombie)
-AUDIO_FILE = Path("/tmp/saga.wav")
 LOG_FILE = PROJECT_DIR / "saga.log"
 
 EDGE_VOICE = "es-AR-ElenaNeural"  # Microsoft Edge TTS, voz argentina femenina
@@ -21,12 +19,9 @@ WHISPER_SIZE = os.environ.get("VOICE_WHISPER_SIZE", "small")  # small: preciso (
 WHISPER_BEAM = int(os.environ.get("VOICE_WHISPER_BEAM", "5"))  # beam5: búsqueda más amplia/robusta con small (preferencia del usuario). beam1 dispara loops
 # Daemon STT: mantiene el modelo caliente en RAM entre invocaciones (mata los ~3s
 # de recarga por Win+Z). transcribe() es cliente; si el daemon esta caido cae a inline.
-WHISPER_SOCK = Path("/tmp/saga-whisper.sock")
-WHISPER_DAEMON = PROJECT_DIR / "whisper_daemon.py"
-WHISPER_IDLE_S = 1800  # daemon se autoapaga tras 30 min sin uso
-# Params de decodificación de Whisper, UNA sola fuente (los usan el daemon y el
-# fallback inline -> antes estaban duplicados y se desincronizaban). beam_size y
-# language van aparte. temperature como lista = fallback; no_repeat_ngram mata loops.
+WHISPER_SOCK = Path("/tmp/saga-whisper.sock")   # lo chequea `saga --doctor`
+# Params de decodificación de Whisper (faster-whisper en el agente cuando NO hay key Deepgram).
+# temperature como lista = fallback; no_repeat_ngram mata loops.
 WHISPER_DECODE = dict(
     vad_filter=True,
     condition_on_previous_text=False,
@@ -147,27 +142,13 @@ CLAUDE_SYSTEM_PROMPT = (
     "Si explicas algo tecnico, lo contas como historia, no como manual."
 )
 
-SAMPLE_RATE = 16000
-CHANNELS = 1
-MIN_DURATION_S = 0.4
+SAMPLE_RATE = 16000   # lo usa el wake_daemon (Vosk, dormido)
 CLAUDE_TIMEOUT_S = 180
 
-# Auto-stop por silencio (VAD Silero) también en el flujo Win+Z, no solo en modo wake.
-# Default ON: apretás Win+Z, hablás, y corta solo al callar (no hace falta 2do Win+Z
-# para cortar). El 2do Win+Z para cortar a mano sigue andando igual. VOICE_AUTOSTOP=0
-# vuelve al modo clásico "Win+Z arranca / Win+Z corta".
-AUTOSTOP_ON_MANUAL = os.environ.get("VOICE_AUTOSTOP", "1") != "0"
-
-# Modo LiveKit. Cuando está ON, el runtime de audio (captura, streaming, chunks, VAD,
-# turn detection, barge-in) lo maneja livekit-agents (lk/agent.py console) EN VEZ de
-# nuestro whisper_daemon + flujo Win+Z. Claude sigue siendo el cerebro y el orbe +
-# edge-tts se reusan. Default ON -> `saga-ctl start` levanta el agente LiveKit. Para
-# volver al modo clásico (Win+Z por-turno): VOICE_LIVEKIT=0. Ver lk/README.md.
-LIVEKIT_ENABLED = os.environ.get("VOICE_LIVEKIT", "1") != "0"
 LK_AGENT = PROJECT_DIR / "lk" / "agent.py"
 LK_LOG = PROJECT_DIR / "livekit_agent.log"
-# Socket de control: Win+Z (vc/app.py) le manda "toggle"/"on"/"off" al agente para
-# prender/apagar el mic (push-to-talk). Lo crea y escucha el proceso del agente.
+# Socket de control: Win+Z (vc/app.py) le manda "press" al agente para prender/apagar el mic
+# (push-to-talk). Lo crea y escucha el proceso del agente.
 LK_CTL_SOCK = Path("/tmp/saga-lk-ctl.sock")
 
 # Secretos del proyecto (API keys). Archivo gitignored, cargado por el agente con
@@ -203,9 +184,6 @@ LIVEKIT_SERVER_BIN = HOME / ".local/bin/livekit-server"
 LIVEKIT_CONFIG = PROJECT_DIR / "livekit.yaml"
 LK_SERVER_LOG = PROJECT_DIR / "livekit_server.log"
 LIVEKIT_SIGNAL_PORT = 7880   # signaling (loopback) — readiness del server
-# Transporte de audio cuando LIVEKIT_ENABLED: 'room' (default: server local + browser cliente) o
-# 'console' (fallback dev: audio local en el proceso, sin server). saga-ctl rutea por esto.
-SAGA_TRANSPORT = os.environ.get("SAGA_TRANSPORT", "room").strip().lower()
 
 MONITOR_CLASS = "saga-monitor"
 MONITOR_WORKSPACE = 10
@@ -230,13 +208,10 @@ WORD_ALIASES_PATH = PROJECT_DIR / "word_aliases.json"
 
 SESSION_FILE = PROJECT_DIR / "session.json"
 
-# Wake word ON/OFF. Default OFF: el trigger es Win+Z (sin escucha continua -> 0
-# falsos positivos, 0 contención de mic, un daemon menos). El wake_daemon y TODO su
-# código quedan intactos; VOICE_WAKE_ENABLED=1 reactiva la escucha de "claude".
-# Lo lee vcctl al levantar para decidir si lanza el wake_daemon.
-WAKE_ENABLED = os.environ.get("VOICE_WAKE_ENABLED", "0") == "1"
+# Wake word del agente LiveKit: ON/OFF con SAGA_WAKE_ENABLED (lo leen lk/agent.py + orb_server).
+# Default OFF: el trigger es Win+Z. Modelo "hey saga" (U4) sobre el track del browser.
 
-# Wake word: daemon Vosk que escucha el mic en continuo y dispara el flujo al oir
+# Wake word clásico (Vosk, DORMIDO/fuera de scope): daemon que escuchaba el mic y disparaba el
 # "saga" (o variantes que el STT chico confunde). Local, sin cuenta, sin training.
 # Ventaja sobre "claude": "saga" SI esta en el lexico ES -> Vosk la reconoce nativo.
 WAKE_MODEL_DIR = PROJECT_DIR / "models" / "vosk-model-small-es-0.42"

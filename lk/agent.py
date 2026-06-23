@@ -16,16 +16,11 @@ Win+Z (otro proceso) habla con el agente por un socket Unix (LK_CTL_SOCK) mandan
 "press"; el server del socket corre en el MISMO loop que la sesión -> llama la API
 de LiveKit directo.
 
-Dos modos de transporte (mismo código; el subcomando decide):
-  - ROOM (default, Ciclo 4): worker conectado a livekit-server. El audio llega por el
-    track del BROWSER (cliente orbe). En room el track detached DESCARTA frames
-    (room_io/_input.py) -> NO hay backlog (resuelve el bug del modo console). El wake
-    (opt-in, U4) corre acá en el SERVER sobre el track del mic (WakeWordTrackDetector),
-    NO en el cliente: reusa el modelo Python en vez de portarlo a onnxruntime-web.
+Transporte ÚNICO: ROOM (livekit-server local + browser cliente). El audio llega por el
+track del BROWSER (cliente orbe); en room el track detached DESCARTA frames
+(room_io/_input.py) -> NO hay backlog. El wake (opt-in, U4) corre acá en el SERVER sobre
+el track del mic (WakeWordTrackDetector), reusando el modelo Python.
         .venv/bin/python lk/agent.py start      # usa LIVEKIT_URL/API_KEY/API_SECRET (.env.local)
-  - CONSOLE (fallback dev): runtime de audio local, sin server. El wake server-side
-    (mic local) SÍ corre acá. Tiene el bug del buffer conocido (ver Ciclo 3).
-        .venv/bin/python lk/agent.py console
 """
 
 import os
@@ -38,15 +33,14 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from livekit import agents, rtc
-from livekit.agents import AgentServer, AgentSession, Agent, room_io
+from livekit.agents import AgentServer, AgentSession, Agent
 from livekit.plugins import silero, deepgram   # deepgram: import a nivel módulo (el plugin
 # se registra al importar y DEBE ser en el main thread; importarlo tarde crashea)
-from livekit.plugins import noise_cancellation   # BVC: saca ruido + voces de fondo del mic
 from livekit.plugins.turn_detector.multilingual import MultilingualModel  # EOU semántico (anti-chopping)
 from dotenv import load_dotenv
 
 from lk.claude_llm import ClaudeCodeLLM
-from lk.wakeword import WakeWordDetector, WakeWordTrackDetector
+from lk.wakeword import WakeWordTrackDetector
 from vc.attach import stage_text, clear_text
 from vc.claudecli import prewarm_claude
 from vc.config import CLAUDE_SYSTEM_PROMPT, LK_CTL_SOCK, ENV_FILE, LIVEKIT_AGENT_NAME
@@ -66,9 +60,6 @@ _HAS_DEEPGRAM = bool(os.environ.get("DEEPGRAM_API_KEY"))
 # OJO: bool("0") es True en Python -> NO usar bool() sobre el env crudo (SAGA_WAKE_ENABLED=0
 # quedaba activo). Comparar el valor real.
 _WAKE_ENABLED = os.environ.get("SAGA_WAKE_ENABLED", "0").strip().lower() in ("1", "true", "yes", "on")
-# Modo de transporte = el subcomando con el que se lanza. `console` -> audio local (fallback);
-# cualquier otro (`start`/`dev`) -> room (worker conectado al server, default Ciclo 4).
-_CONSOLE_MODE = "console" in sys.argv
 
 # Voz por default (Aura-2 español, neutra). Constante, no env: arquitectura sólida.
 _DEEPGRAM_VOICE = "aura-2-gloria-es"
@@ -113,7 +104,7 @@ server = AgentServer()
 
 # agent_name -> el worker se registra como agente NOMBRADO (no auto-dispatch). Se despacha solo
 # cuando el token del cliente lo pide explícitamente (ver /token en orb_server). Robustece el
-# dispatch contra el orden de arranque / pestañas zombie. En console (sin server) se ignora.
+# dispatch contra el orden de arranque / pestañas zombie.
 @server.rtc_session(agent_name=LIVEKIT_AGENT_NAME)
 async def entry(ctx: "agents.JobContext") -> None:
     global _ctl_server
@@ -273,33 +264,14 @@ async def entry(ctx: "agents.JobContext") -> None:
                 parts.append(f"{a}={v:.3f}s")
         log("[metrics] " + "  ".join(parts))
 
-    # Cancelación de ruido en el INPUT (BVC = Krisp): saca ruido y voces/sonidos de
-    # fondo ANTES del VAD/STT. OJO: BVC necesita LiveKit Cloud -> en el server self-hosted
-    # (modo room) NO se puede habilitar ("audio filter cannot be enabled: LiveKit Cloud is
-    # required") y ensucia el pipeline. Solo en console. En room nos apoyamos en el VAD Silero
-    # (activation_threshold 0.7) para el ruido. BVC()=construye OK pero falla al APLICARSE ->
-    # por eso se gatea por modo, no por try/except.
-    _nc = None
-    if _CONSOLE_MODE:
-        try:
-            _nc = noise_cancellation.BVC()
-        except Exception as e:  # noqa: BLE001
-            log(f"[lk] noise cancellation OFF ({type(e).__name__})")
-            _nc = None
-    await session.start(
-        agent=Assistant(),
-        room=ctx.room,
-        # API actual de livekit-agents 1.6 (RoomInputOptions/RoomOutputOptions están deprecados):
-        # noise_cancellation vive ahora en RoomOptions.audio_input.
-        room_options=room_io.RoomOptions(
-            audio_input=room_io.AudioInputOptions(noise_cancellation=_nc),
-        ),
-    )
+    # Ruido: en room nos apoyamos en el VAD Silero (activation_threshold 0.7). BVC (noise_cancellation)
+    # NO aplica self-hosted (requiere LiveKit Cloud: "audio filter cannot be enabled") -> no se usa.
+    await session.start(agent=Assistant(), room=ctx.room)
 
     # Arrancar con el mic APAGADO: el agente NO escucha hasta que apretás Win+Z.
     session.input.set_audio_enabled(False)
     orb_state("idle")
-    log(f"[lk] transporte: {'console (audio local)' if _CONSOLE_MODE else 'room (track del browser)'}")
+    log("[lk] transporte: room (track del browser)")
     log("[lk] agente listo. Win+Z: graba / corta y manda / mata. Silencio 2s también manda.")
 
     # ── Win+Z (un solo comando "press"): el agente decide según la fase ──
@@ -405,19 +377,13 @@ async def entry(ctx: "agents.JobContext") -> None:
         pass
 
     # Wake word server-side (opt-in: SAGA_WAKE_ENABLED=1). Al detectar "hey saga" -> _press()
-    # (mismo flujo que Win+Z). Dos transportes:
-    #   - console: mic LOCAL del proceso (portaudio) -> WakeWordDetector.
-    #   - room:    sobre el track del mic del BROWSER -> WakeWordTrackDetector (U4). El worker es
-    #              headless; el browser publica el mic DESMUTEADO (orb.html lee el flag `wake` del
-    #              /token). El STT sigue gateado por set_audio_enabled -> solo procesa tras el wake;
-    #              el detector lee el track directo (independiente de set_audio_enabled) -> oye siempre.
-    _wake = None
+    # (mismo flujo que Win+Z). Corre sobre el track del mic del BROWSER -> WakeWordTrackDetector (U4).
+    # El worker es headless; el browser publica el mic DESMUTEADO (orb.html lee el flag `wake` del
+    # /token). El STT sigue gateado por set_audio_enabled -> solo procesa tras el wake; el detector lee
+    # el track directo (independiente de set_audio_enabled) -> oye siempre.
     _wake_track = {"d": None}   # un solo detector aunque lleguen varios track_subscribed
-    if _WAKE_ENABLED and _CONSOLE_MODE:
-        _wake = WakeWordDetector(on_wake=_press)
-        await _wake.start()
-    elif _WAKE_ENABLED:
-        log("[lk] wake server-side ON (room): esperando el track del mic del browser.")
+    if _WAKE_ENABLED:
+        log("[lk] wake server-side ON: esperando el track del mic del browser.")
 
         def _start_wake_on_track(track) -> None:
             if _wake_track["d"] is not None:
