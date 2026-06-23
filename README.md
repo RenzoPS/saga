@@ -23,6 +23,13 @@ leer archivos, usar MCP: hace cosas en la máquina, no solo conversa.
 ### Latencias típicas (con Deepgram)
 STT ~0.3s · Claude TTFT ~2s · TTS ttfb ~0.3s → **~2-3s de "callaste" a "te habla"**.
 
+## Documentación
+
+Documentación para mantenedores en [`docs/`](docs/): [arquitectura](docs/architecture.md) ·
+[flujo de un turno](docs/turn-flow.md) · [API interna](docs/internal-api.md) ·
+[guía del código](docs/code-guide.md) · [operación](docs/operations.md) ·
+[deuda técnica + plan](docs/tech-debt-plan.md). Empezá por [`docs/README.md`](docs/README.md).
+
 ## Requisitos
 
 - Python 3.12 + venv del proyecto (`.venv/`).
@@ -31,12 +38,49 @@ STT ~0.3s · Claude TTFT ~2s · TTS ttfb ~0.3s → **~2-3s de "callaste" a "te h
 - Binarios: `claude` (CLI), `mpg123`, `grim` (screenshot), `hyprctl`/`kitty`/`xdg-open`.
 - Hotkey: bind de Hyprland a `~/.local/bin/saga` (Win+Z).
 
-## Setup
+## Setup (desde cero)
 
+**1. Binarios del sistema** (Arch):
 ```bash
-uv pip install --python .venv/bin/python -e .   # o pip install -e .
-echo 'DEEPGRAM_API_KEY=tu_key' > .env.local      # gitignored, NO se commitea
+sudo pacman -S mpg123 grim kitty        # reproducción / screenshot / monitor
+# claude CLI:  https://github.com/anthropics/claude-code   (npm i -g @anthropic-ai/claude-code)
+# uv (opcional, recomendado):  https://docs.astral.sh/uv/
 ```
+
+**2. Crear el venv e instalar el proyecto** (genera los comandos `saga` y `saga-ctl` en `.venv/bin/`):
+```bash
+python -m venv .venv                                  # o: uv venv
+.venv/bin/python -m pip install -e .                  # o: uv pip install --python .venv/bin/python -e .
+```
+
+**3. La key de Deepgram** (gitignored, NO se commitea):
+```bash
+echo 'DEEPGRAM_API_KEY=tu_key' > .env.local           # cuenta free en deepgram.com
+```
+Sin key, cae solo a fallback local (faster-whisper + edge-tts, más lento).
+
+**4. Comandos globales** (wrappers en `~/.local/bin`, para no activar el venv a mano).
+El keybind de Hyprland los necesita por ruta absoluta:
+```bash
+cat > ~/.local/bin/saga <<'EOF'
+#!/usr/bin/env bash
+export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin"
+exec "$HOME/.local/share/saga/.venv/bin/python" "$HOME/.local/share/saga/saga.py" "$@"
+EOF
+cat > ~/.local/bin/saga-ctl <<'EOF'
+#!/usr/bin/env bash
+exec "$HOME/.local/share/saga/.venv/bin/python" "$HOME/.local/share/saga/vcctl.py" "$@"
+EOF
+chmod +x ~/.local/bin/saga ~/.local/bin/saga-ctl
+```
+
+**5. Keybind de Hyprland** (Win+Z = push-to-talk). En `~/.config/hypr/.../Keybinds.conf`:
+```
+bindd = $mainMod, Z, Saga (toggle), exec, /home/TU_USUARIO/.local/bin/saga
+```
+Después `hyprctl reload`.
+
+> Wake word "saga"/"hey saga": OFF por default (`VOICE_WAKE_ENABLED=1` para activar; requiere el modelo Vosk en `models/`). El trigger normal es Win+Z.
 
 ## Correr
 

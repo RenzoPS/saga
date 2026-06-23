@@ -37,6 +37,7 @@ from livekit.plugins import noise_cancellation   # BVC: saca ruido + voces de fo
 from dotenv import load_dotenv
 
 from lk.claude_llm import ClaudeCodeLLM
+from lk.wakeword import WakeWordDetector
 from vc.attach import stage_text, clear_text
 from vc.claudecli import prewarm_claude
 from vc.config import CLAUDE_SYSTEM_PROMPT, LK_CTL_SOCK, ENV_FILE
@@ -47,6 +48,9 @@ from vc.runtime import log
 # Deepgram; si NO hay key, el código cae solo a whisper/edge (no es config seteable).
 load_dotenv(ENV_FILE)
 _HAS_DEEPGRAM = bool(os.environ.get("DEEPGRAM_API_KEY"))
+# OJO: bool("0") es True en Python -> NO usar bool() sobre el env crudo (SAGA_WAKE_ENABLED=0
+# quedaba activo). Comparar el valor real.
+_WAKE_ENABLED = os.environ.get("SAGA_WAKE_ENABLED", "0").strip().lower() in ("1", "true", "yes", "on")
 
 # Voz por default (Aura-2 español, neutra). Constante, no env: arquitectura sólida.
 _DEEPGRAM_VOICE = "aura-2-gloria-es"
@@ -95,7 +99,11 @@ async def entry(ctx: "agents.JobContext") -> None:
     ensure_orb()       # orbe (idéntico a vc/)
     prewarm_claude()   # cerebro caliente en paralelo
 
-    vad = silero.VAD.load()
+    # activation_threshold 0.7 (default 0.5): el mic de laptop capta ruido de fondo continuo.
+    # Si el VAD lo ve como "voz", el usuario nunca pasa a 'listening' -> el user_away_timeout
+    # nativo NUNCA arranca su cuenta -> el turno no cierra y el orbe queda pegado en "Grabando".
+    # Subir el threshold hace que el VAD ignore el ruido -> el 'away' nativo funciona.
+    vad = silero.VAD.load(activation_threshold=0.7)
     session = AgentSession(
         stt=_build_stt(vad),   # Deepgram streaming por default; whisper si no hay key
         vad=vad,
@@ -111,6 +119,9 @@ async def entry(ctx: "agents.JobContext") -> None:
             # y rompía todo al apretar Win+Z mientras hablaba). vad = local, sin key.
             "interruption": {"mode": "vad"},
         },
+        # Si grabás y NO hablás en 6s, LiveKit marca al usuario "away" (mecanismo nativo,
+        # basado en VAD real). Lo enganchamos abajo para volver a idle ('no entendí').
+        user_away_timeout=6.0,
     )
 
     # Fase del flujo (gobierna qué hace Win+Z, igual que el flujo clásico):
@@ -119,9 +130,22 @@ async def entry(ctx: "agents.JobContext") -> None:
     #   busy  -> procesando: transcribiendo / pensando / hablando
     phase = {"v": "idle"}
 
+    @session.on("user_state_changed")
+    def _on_user_state(ev) -> None:
+        # "away" = LiveKit no detectó voz por user_away_timeout (6s) desde que abrió el mic.
+        # Si seguíamos grabando sin que nadie hablara -> abortar y volver a idle ('no entendí').
+        # Mecanismo nativo basado en VAD real (no un timer ciego) -> sin races.
+        if getattr(ev, "new_state", None) == "away" and phase["v"] == "rec":
+            session.input.set_audio_enabled(False)
+            session.clear_user_turn()
+            phase["v"] = "idle"
+            orb_state("cancel")
+            log("[lk] usuario 'away' (sin voz 6s) -> 'no entendí', vuelvo a idle")
+
     @session.on("agent_state_changed")
     def _on_agent_state(ev) -> None:
         st = getattr(ev, "new_state", None)
+        log(f"[lk] agent_state -> {st} (phase={phase['v']})")   # DEBUG: trazar secuencia de estados
         if st in ("thinking", "speaking"):
             # Turno cerrado (por SILENCIO automático o por Win+Z). Si veníamos grabando,
             # el VAD cerró solo -> apagar mic y pasar a procesar.
@@ -258,6 +282,12 @@ async def entry(ctx: "agents.JobContext") -> None:
         os.chmod(str(LK_CTL_SOCK), 0o600)     # privado al usuario (como los otros sockets del proyecto)
     except OSError:
         pass
+
+    # Wake word (opt-in: SAGA_WAKE_ENABLED=1). Corre en background, fuera del response
+    # path. Al detectar "hey saga" llama _press() -> mismo flujo que Win+Z.
+    if _WAKE_ENABLED:
+        _wake = WakeWordDetector(on_wake=_press)
+        await _wake.start()
 
 
 if __name__ == "__main__":

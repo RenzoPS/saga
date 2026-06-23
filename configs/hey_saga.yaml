@@ -1,0 +1,8 @@
+model_name: hey_saga
+target_phrases:
+   - hey saga
+n_samples: 5000
+n_samples_val: 1000
+tts_backend: piper_vits
+data_dir: models/_data
+output_dir: models

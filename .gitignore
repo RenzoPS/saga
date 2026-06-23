@@ -21,13 +21,25 @@ session.json
 
 # todo lo de Claude (CLAUDE.md + superpowers): local, NO se commitea
 .claude/
+docs/superpowers/
+
+# artefactos del proceso AI-DLC: bitácora/contexto local, NO se commitea (docs/ sí va al repo)
+aidlc-docs/
 
 # temporales del sistema
 /tmp/
-models/
+# models/ son insumos pesados (datasets, TTS, features ~22GB) -> NO se versionan.
+# Excepción: el modelo wake word entrenado (.onnx, ~166KB) SÍ va al repo.
+# (Se ignora el CONTENIDO con models/* para poder re-incluir el .onnx; ignorar el dir
+# entero con models/ impediría la excepción.)
+models/*
+!models/hey_saga/
+models/hey_saga/*
+!models/hey_saga/hey_saga.onnx
 
 # artefactos de testing/visual (no van al repo)
 .playwright-mcp/
 orb-core-*.png
 graphify-out/
 .graphifyignore
+.aidlc/

@@ -25,6 +25,7 @@ dependencies = [
     "sounddevice==0.5.5",      # captura de micrófono (flujo clásico)
     "numpy==2.4.6",
     "vosk",                    # wake word local (wake_daemon, OFF por default)
+    "livekit-wakeword[listener]",  # wake word "hey saga" (SAGA_WAKE_ENABLED=1 para activar)
 ]
 
 # Comandos instalados (reemplazan a los wrappers hechos a mano en ~/.local/bin).
