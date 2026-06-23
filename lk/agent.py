@@ -141,9 +141,9 @@ async def entry(ctx: "agents.JobContext") -> None:
             # y rompía todo al apretar Win+Z mientras hablaba). vad = local, sin key.
             "interruption": {"mode": "vad"},
         },
-        # Si grabás y NO hablás en 6s, LiveKit marca al usuario "away" (mecanismo nativo,
-        # basado en VAD real). Lo enganchamos abajo para volver a idle ('no entendí').
-        user_away_timeout=6.0,
+        # (El timeout "no hablaste -> no te entendí" lo manejamos con un timer PROPIO abajo,
+        # VAD-aware, en vez del user_away_timeout nativo: no requiere métodos privados para
+        # resetearlo al abrir el mic con Win+Z.)
         # OFF: la "preemptive generation" arranca el LLM sobre transcripts PARCIALES y lo
         # cancela/reintenta cuando seguís hablando. Con nuestro LLM custom (bridge bloqueante
         # al claude_daemon) ese cancel/restart deja el turno colgado SIN completar (se ve
@@ -159,23 +159,45 @@ async def entry(ctx: "agents.JobContext") -> None:
     #   busy  -> procesando: transcribiendo / pensando / hablando
     phase = {"v": "idle"}
 
-    @session.on("user_state_changed")
-    def _on_user_state(ev) -> None:
-        # "away" = LiveKit no detectó voz por user_away_timeout (6s) desde que abrió el mic.
-        # Si seguíamos grabando sin que nadie hablara -> abortar y volver a idle ('no entendí').
-        # Mecanismo nativo basado en VAD real (no un timer ciego) -> sin races.
-        if getattr(ev, "new_state", None) == "away" and phase["v"] == "rec":
+    # Timer PROPIO de "abriste el mic y no hablaste -> no te entendí". Reemplaza el
+    # user_away_timeout nativo (que obligaba a resetear con un método privado al abrir el mic).
+    # VAD-aware: se ARMA al entrar en rec (Win+Z/wake) y se CANCELA apenas el VAD detecta que
+    # empezaste a hablar (user_state 'speaking') o cuando el turno arranca (agent 'thinking').
+    # Si vence sin que hayas hablado, vuelve a idle. Solo herramientas estándar (call_later).
+    _NO_SPEECH_TIMEOUT = 6.0
+    loop = asyncio.get_running_loop()
+    _away = {"h": None}
+
+    def _cancel_away() -> None:
+        if _away["h"] is not None:
+            _away["h"].cancel()
+            _away["h"] = None
+
+    def _arm_away() -> None:
+        _cancel_away()
+        _away["h"] = loop.call_later(_NO_SPEECH_TIMEOUT, _away_fire)
+
+    def _away_fire() -> None:
+        _away["h"] = None
+        if phase["v"] == "rec":   # seguís en rec y nunca hablaste -> abortar
             session.input.set_audio_enabled(False)
             session.clear_user_turn()
             phase["v"] = "idle"
-            orb_state("cancel")
-            _event("SILENCIO 6s sin voz -> no te entendí, vuelvo a idle")
+            orb_state("error")   # AMARILLO "No te entendí" (no el rojo de 'cancel'): es lo correcto acá
+            _event(f"SILENCIO {int(_NO_SPEECH_TIMEOUT)}s sin voz -> no te entendí, vuelvo a idle")
+
+    @session.on("user_state_changed")
+    def _on_user_state(ev) -> None:
+        # Empezaste a hablar (VAD real) -> cancelar el timeout de 'no hablaste'.
+        if getattr(ev, "new_state", None) == "speaking":
+            _cancel_away()
 
     @session.on("agent_state_changed")
     def _on_agent_state(ev) -> None:
         st = getattr(ev, "new_state", None)
         log(f"[lk] agent_state -> {st} (phase={phase['v']})")   # DEBUG: trazar secuencia de estados
         if st in ("thinking", "speaking"):
+            _cancel_away()   # el turno arrancó -> ya no aplica el timeout de 'no hablaste'
             # Turno cerrado (por SILENCIO automático o por Win+Z). Si veníamos grabando,
             # el VAD cerró solo -> apagar mic y pasar a procesar.
             if phase["v"] == "rec":
@@ -246,16 +268,11 @@ async def entry(ctx: "agents.JobContext") -> None:
             session.input.set_audio_enabled(True)
             phase["v"] = "rec"
             orb_state("rec")           # "● Grabando"
-            # Resetear el away timer: que cuente 6s FRESCOS desde que abrís el mic. Sin esto, un
-            # timer stale del idle anterior dispara 'no entendí' al instante (away a los 0s).
-            # Método privado de la sesión -> try/except por robustez.
-            try:
-                session._set_user_away_timer()
-            except Exception:  # noqa: BLE001
-                pass
+            _arm_away()                # arranca el timeout 'abriste el mic y no hablaste' (6s frescos)
             _event("Win+Z -> GRABANDO (hablá)")
         elif p == "rec":
             # Cortar y MANDAR el turno ya (sin esperar el silencio).
+            _cancel_away()
             session.input.set_audio_enabled(False)
             phase["v"] = "busy"
             orb_state("think")   # STT (Deepgram) es instantáneo -> directo a Pensando
@@ -263,6 +280,7 @@ async def entry(ctx: "agents.JobContext") -> None:
             _event("Win+Z -> CORTÉ, mando el turno")
         else:  # busy
             # Matar la respuesta/proceso en curso y volver a idle (con animación cancel).
+            _cancel_away()
             session.interrupt(force=True)   # corta TTS + cancela el LLM (Claude)
             session.clear_user_turn()
             session.input.set_audio_enabled(False)
@@ -275,6 +293,7 @@ async def entry(ctx: "agents.JobContext") -> None:
         inmediato sin grabar voz. Pasa por el MISMO LLM (ClaudeCodeLLM) + TTS -> responde por
         voz. La imagen pegada (si hay) se incluye vía take_staged() dentro del LLM."""
         clear_text()   # el texto ya viaja en `text` (user_input) -> descartá el staged, no dupliques
+        _cancel_away()
         if phase["v"] == "rec":
             session.input.set_audio_enabled(False)   # estabas grabando -> cancelá el mic
         elif phase["v"] == "busy":
