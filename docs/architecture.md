@@ -1,84 +1,136 @@
 # Arquitectura
 
-saga es un **monolito modular de procesos cooperantes** sobre Linux/Hyprland. No hay servidor
-central ni red entrante: todo corre local, coordinado por **sockets Unix** y **un puerto HTTP
-local** (el orbe). El runtime de audio lo gobierna **LiveKit-agents** en modo `console`. El
-"cerebro" es **Claude Code** corriendo como daemon persistente. STT/TTS salen a **Deepgram** si
-hay key, o caen a **faster-whisper + edge-tts** locales.
+saga es un **monolito modular de procesos cooperantes** sobre Linux/Hyprland. Todo corre local. El
+runtime de audio lo gobierna **LiveKit-agents** en modo `room` (default, Ciclo 4): un **server LiveKit
+nativo** hostea una sala WebRTC donde el **browser cliente** (el orbe) publica el mic y recibe la voz, y
+el **worker** (el cerebro) hace STT/LLM/TTS. El "cerebro" es **Claude Code** corriendo como daemon
+persistente. STT/TTS salen a **Deepgram** si hay key, o caen a **faster-whisper + edge-tts** locales.
 
 > Documento de referencia para mantenedores. Describe el sistema tal como está en el código.
 
-## Dos topologías (según `VOICE_LIVEKIT`)
+## Topología room (server ↔ cliente ↔ worker)
 
-| | Modo LiveKit (default) | Modo clásico (fallback, `VOICE_LIVEKIT=0`) |
-|---|---|---|
-| Dueño del audio | `lk/agent.py console` (LiveKit-agents) | proceso efímero por Win+Z (`saga.py` → `vc/app.py`) |
-| Captura/VAD/turn/barge-in | LiveKit | `vc/audio.py` (sounddevice + VAD Silero) |
-| STT | Deepgram Nova-3 (o whisper local) | `whisper_daemon.py` (faster-whisper caliente) |
-| TTS | Deepgram Aura-2 (o edge-tts) | `vc/tts.py` (edge-tts → mpg123) |
-| Wake word | — | `wake_daemon.py` (Vosk, OFF por default) |
-
-**El stack STT/TTS lo decide la presencia de `DEEPGRAM_API_KEY`** en `.env.local`, no un flag.
-
-## Diagrama de componentes (modo LiveKit, default)
+En modo room el audio viaja por **WebRTC** entre tres piezas locales: el **server** (binario nativo) hostea
+la sala; el **browser cliente** publica el track de mic y reproduce el track TTS; el **worker** recibe el mic,
+lo transcribe, piensa y publica la voz de respuesta.
 
 ```mermaid
 graph TD
-    WinZ["Win+Z (Hyprland) -> saga.py"]
-    Panel["Panel del orbe (browser)"]
+    subgraph Server["livekit-server (binario nativo, local)"]
+        Room["la SALA (room=saga)<br/>signaling :7880 (loopback) · media udp :7882 (LAN)"]
+    end
 
-    Agent["lk/agent.py console<br/>(AgentSession, dueño del audio)"]
-    LLM["lk/claude_llm.py<br/>(LLM custom = turn handler)"]
-    CtlSock["/tmp/saga-lk-ctl.sock"]
+    subgraph Client["saga-client = browser (orb/orb.html)"]
+        Orb["LiveKit JS SDK (vendor)<br/>publica mic (muteado) · recibe TTS<br/>anima el orbe con la voz real (Web Audio)"]
+    end
 
-    CDaemon["claude_daemon.py<br/>(proceso claude caliente)"]
+    subgraph Worker["saga-worker (lk/agent.py start)"]
+        Agent["AgentSession (dueño del audio)<br/>STT/TTS Deepgram · Silero VAD · turn detector"]
+        LLM["lk/claude_llm.py (LLM custom = turn handler)"]
+    end
+
+    OServer["orb/orb_server.py<br/>HTTP :8777 (SSE + /token)"]
+    Ctl["saga-ctl (vcctl.py)<br/>dispatch explicito"]
+    WinZ["Win+Z (Hyprland)"]
+    CtlSock["LK_CTL_SOCK (unix)"]
+    CDaemon["claude_daemon.py<br/>(claude caliente)"]
     CSock["/tmp/saga-claude.sock"]
-
-    OServer["orb/orb_server.py<br/>(HTTP :8777 + SSE)"]
     DG["Deepgram Nova-3 + Aura-2<br/>(si hay key)"]
-    Grim["grim (screenshot)"]
 
+    Orb -->|publica mic track| Room
+    Room -->|publica TTS track| Orb
+    Room <-->|track audio| Agent
+    Orb -->|GET /token /state| OServer
+    Ctl -->|create_dispatch agent=saga| Room
     WinZ -->|press| CtlSock
-    Panel -->|POST /say /stage /attach| OServer
-    OServer -->|reenvia al socket| CtlSock
+    OServer -->|/say /stage -> socket| CtlSock
     CtlSock -.-> Agent
     Agent --> LLM
     LLM -->|ask_claude_stream| CSock
     CSock --> CDaemon
     Agent -->|STT/TTS| DG
     Agent -->|orb_state| OServer
-    LLM -->|visión| Grim
 ```
+
+**Flujo de un turno**: Win+Z → `press` por el socket de control → el cliente desmutea el mic (estado `rec`
+vía SSE) → el server enruta el track al worker → STT (Deepgram) transcribe → VAD + turn detector semántico
+cierran el turno → LLM (Claude vía daemon) → TTS (Deepgram) genera la voz → el worker **publica el track TTS**
+al room → el browser lo reproduce y **anima el orbe con el nivel real de la voz** (Web Audio AnalyserNode).
+
+## Tres transportes (según `SAGA_TRANSPORT` / `VOICE_LIVEKIT`)
+
+| | Modo room (default) | Modo console (fallback dev) | Modo clásico (`VOICE_LIVEKIT=0`) |
+|---|---|---|---|
+| Selección | `SAGA_TRANSPORT=room` | `SAGA_TRANSPORT=console` | `VOICE_LIVEKIT=0` |
+| Dueño del audio | `lk/agent.py start` (LiveKit-agents, vía server) | `lk/agent.py console` (audio local, sin server) | proceso efímero por Win+Z (`vc/app.py`) |
+| Transporte | WebRTC (server ↔ browser ↔ worker) | TCP local de console | sounddevice local |
+| Captura/VAD/turn/barge-in | LiveKit (Silero VAD + turn detector semántico) | LiveKit | `vc/audio.py` (sounddevice + VAD Silero) |
+| STT | Deepgram Nova-3 (o whisper local) | idem | `whisper_daemon.py` (faster-whisper caliente) |
+| TTS | Deepgram Aura-2 (o edge-tts) | idem | `vc/tts.py` (edge-tts → mpg123) |
+| Sync del orbe | sí (track TTS real → Web Audio) | no (stylized) | no (stylized) |
+| Wake word | — (Win+Z; U4 client-wake diferido) | — | `wake_daemon.py` (Vosk, OFF por default) |
+
+**El stack STT/TTS lo decide la presencia de `DEEPGRAM_API_KEY`** en `.env.local`, no un flag.
+
+## Capas del modo room
+
+- **Server** — `livekit-server` **binario nativo** en `~/.local/bin/` (NO Docker: el NAT de Docker sobre
+  localhost rompe el WebRTC con `dtls timeout`). Config `livekit.yaml`: signaling en loopback (`:7880`) +
+  `udp_port: 7882` para media. `node_ip` se inyecta por env `NODE_IP` = IP de LAN auto-detectada por saga-ctl
+  (`ip route`), porque LiveKit nunca bindea el UDP de media a loopback. Keys de `.env.local` (`LIVEKIT_KEYS`).
+- **Worker** (`lk/agent.py start`) — el cerebro. `AgentSession` dueña del audio/STT/TTS/VAD/turn detection.
+  Se registra como agente NOMBRADO (`@server.rtc_session(agent_name="saga")`, dispatch explícito). Default:
+  STT `deepgram.STT(nova-3, es)` + TTS `deepgram.TTS(aura-2-gloria-es)` + Silero VAD + turn detector semántico
+  (`MultilingualModel`, anti-chopping). LLM custom `lk/claude_llm.py` reenvía al `claude_daemon`. Socket de
+  control `LK_CTL_SOCK` (`press`=Win+Z, `say`=texto, `stage`=panel→memoria).
+- **Cliente** (`orb/orb.html`) — browser con LiveKit JS SDK (vendoreado en `orb/vendor/livekit/`). Pide token a
+  `/token`, se une al room, publica el mic (muteado; desmutea en `rec` vía el estado SSE), se suscribe al track
+  TTS, lo reproduce y **anima el orbe con el nivel real de la voz** (Web Audio AnalyserNode).
+- **Token + dispatch** — `orb/orb_server.py` `/token` mintea el JWT del cliente (`livekit.api.AccessToken`).
+  saga-ctl hace `AgentDispatchService.create_dispatch(agent_name=saga, room=saga)` al arrancar → el agente entra
+  al room ANTES que el browser (robusto contra timing y pestañas zombie).
+- **Orquestación** (`vcctl.py` = `saga-ctl`, `_start_room()`) — levanta en orden con readiness por pieza:
+  server nativo → `claude_daemon` → orbe → worker → dispatch → browser. `stop` baja todo (incluido el binario,
+  match por basename, sin tocar esta sesión de claude).
 
 ## Componentes y responsabilidades
 
-- **`lk/agent.py`** — entrypoint LiveKit: arma el `AgentSession` (STT+VAD+LLM+TTS), push-to-talk
-  de 3 fases, fin de turno por silencio (~2s), barge-in, cancelación de ruido (BVC), socket de
-  control. Levanta el orbe y precalienta Claude (single-owner).
-- **`lk/claude_llm.py`** — el turn handler real del modo default: toma el último turno, engancha
-  comandos de voz (reset, visión), consume adjuntos, delega en `claude_daemon`.
-- **`claude_daemon.py` + `vc/claudecli.py`** — el cerebro: un proceso `claude` caliente
-  (stream-json) + cliente con fallback a one-shot.
-- **`orb/orb_server.py` + `vc/orb.py`** — orbe: server SSE local + cliente HTTP no bloqueante.
+- **`livekit-server`** — server WebRTC nativo: hostea el room, enruta los tracks de audio entre cliente y worker.
+- **`lk/agent.py`** — worker LiveKit: arma el `AgentSession` (STT+VAD+turn+LLM+TTS), socket de control, agente
+  nombrado para dispatch explícito. En modo console (fallback) además levanta el orbe y precalienta Claude.
+- **`lk/claude_llm.py`** — el turn handler real del modo default: toma el último turno, engancha comandos de voz
+  (reset, visión), consume adjuntos, delega en `claude_daemon`.
+- **`claude_daemon.py` + `vc/claudecli.py`** — el cerebro: un proceso `claude` caliente (stream-json) + cliente
+  con fallback a one-shot.
+- **`orb/orb_server.py` + `vc/orb.py`** — orbe: server SSE local + endpoint `/token` (JWT del cliente) + puente
+  HTTP→socket (el browser no puede abrir un Unix socket).
 - **`vc/`** — soporte reusado: config, sesión, adjuntos, escritorio, runtime, guard, STT/TTS/audio.
 - **Daemons del flujo clásico** — `whisper_daemon.py` (STT caliente), `wake_daemon.py` (Vosk).
 
 ## Integraciones y transporte
 
 - **Externas**: Deepgram (STT/TTS, nube), Microsoft Edge TTS (fallback), Claude Code CLI (cerebro).
-- **Binarios de sistema**: `grim` (screenshot), `mpg123`/`pacat`/`paplay` (audio),
-  `hyprctl`/`kitty`/`xdg-open` (escritorio).
-- **Transporte local**: 3 sockets Unix (control del agente, cerebro, whisper) con perms `0o600`
-  + HTTP loopback `127.0.0.1:8777` (orbe). Ver `internal-api.md`.
-- **Estado**: sin base de datos. `session.json` (uuid de sesión), `word_aliases.json`
-  (fonetizaciones), efímeros en `/tmp` (tmpfs).
+- **Binarios de sistema**: `livekit-server` (server WebRTC), `grim` (screenshot), `mpg123`/`pacat`/`paplay`
+  (audio), `hyprctl`/`kitty`/`xdg-open` (escritorio).
+- **Transporte de audio (room)**: WebRTC entre browser ↔ server ↔ worker (loopback ~ms). Signaling en
+  `127.0.0.1:7880`; media UDP `:7882` por la IP de LAN.
+- **Transporte de control local**: sockets Unix (control del agente `LK_CTL_SOCK`, cerebro, whisper) con perms
+  `0o600` + HTTP loopback `127.0.0.1:8777` (orbe + token). Ver `internal-api.md`.
+- **Estado**: sin base de datos. `session.json` (uuid de sesión), `word_aliases.json` (fonetizaciones),
+  efímeros en `/tmp` (tmpfs).
 
 ## Decisiones de diseño clave
 
-- **Degradación elegante**: Deepgram→whisper/edge, daemon→one-shot, guard fail-open. Nunca queda mudo.
+- **Server nativo, no Docker**: el NAT de Docker sobre localhost rompe el WebRTC (`dtls timeout`); el binario
+  nativo evita el problema. La migración console→room también resolvió el backlog del buffer de audio del modo
+  console: en room el worker descarta los frames con el track detached (mecanismo nativo `room_io/_input.py`).
+- **Dispatch explícito**: el worker no auto-despacha; saga-ctl crea el dispatch al arrancar → el agente entra al
+  room antes que el browser (sin `FileNotFoundError` por pestañas zombie).
+- **Degradación elegante**: room→console→clásico; Deepgram→whisper/edge; daemon→one-shot; guard fail-open.
+  Nunca queda mudo.
 - **Daemons calientes**: matan el cold-start por turno (modelo/plugins/sesión en RAM).
-- **god-mode + guard**: Claude corre con `--dangerously-skip-permissions`; un hook (`vc/guard.py`)
-  bloquea comandos bash catastróficos.
+- **god-mode + guard**: Claude corre con `--dangerously-skip-permissions`; un hook (`vc/guard.py`) bloquea
+  comandos bash catastróficos.
 - **Privacidad**: capturas de pantalla y adjuntos se borran tras consumirse (consume-once).
 
 Para qué hace cada archivo, ver `code-guide.md`. Para el flujo paso a paso, ver `turn-flow.md`.

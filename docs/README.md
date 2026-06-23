@@ -3,8 +3,9 @@
 Documentación para mantenedores: entender, operar y extender saga. Puerta de entrada e índice.
 
 > **saga** — asistente de voz Linux/Hyprland: **voz → Claude Code → voz** sobre LiveKit + Deepgram,
-> con un orbe 3D reactivo. El cerebro es Claude Code (ejecuta bash, lee archivos, usa MCP):
-> *actúa* sobre la máquina, no solo conversa.
+> con un orbe 3D reactivo. **Default: transporte ROOM** (server LiveKit local + browser cliente + worker);
+> fallbacks: `console` y clásico. El cerebro es Claude Code (ejecuta bash, lee archivos): *actúa* sobre la
+> máquina, no solo conversa.
 
 ## Empezar
 
@@ -15,8 +16,8 @@ Documentación para mantenedores: entender, operar y extender saga. Puerta de en
 
 | Documento | Para qué |
 |-----------|----------|
-| [architecture.md](architecture.md) | Cómo está armado: las dos topologías, componentes, integraciones |
-| [turn-flow.md](turn-flow.md) | Qué pasa paso a paso en un turno (LiveKit y clásico), comandos de voz |
+| [architecture.md](architecture.md) | Cómo está armado: topología room (default) + fallbacks, componentes |
+| [turn-flow.md](turn-flow.md) | Qué pasa paso a paso en un turno (room + clásico), turn detector, comandos de voz |
 | [internal-api.md](internal-api.md) | Endpoints HTTP del orbe + protocolos de los 3 sockets + modelos de datos |
 | [code-guide.md](code-guide.md) | Recorrido archivo por archivo: qué hace cada módulo |
 | [operations.md](operations.md) | saga-ctl, procesos, logs, env, diagnóstico, gotchas críticos |

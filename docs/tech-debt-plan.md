@@ -3,11 +3,31 @@
 Consolidación de la deuda detectada + plan priorizado. **Es un plan, no una ejecución**: no se tocó
 código. Detectada durante el análisis del código.
 
+> **Actualización Ciclo 4 (migración console → modo room, 2026-06-23).** La migración resolvió deuda
+> que estaba documentada como *limitación de runtime* del modo console (no estaba en la tabla D1-R2 de
+> abajo, pero era deuda real). Ver la sección **"Resuelto por el Ciclo 4"**. La tabla D1-R2 (plan de
+> remediación del análisis de código) sigue **abierta**: el Ciclo 4 NO la ejecutó (era una oportunidad
+> de limpiar D1, pero el ciclo se cerró sin tocarla).
+
+## Resuelto por el Ciclo 4 (migración a modo room)
+
+Deuda/limitaciones del modo console que el cambio de transporte **eliminó de raíz** (verificado en vivo
+por el usuario, 10/10). Referencia: `aidlc-docs/construction/build-and-test/ciclo4-build-and-test.md`.
+
+| # | Deuda (modo console) | Cómo se resolvió en room | Estado |
+|---|---|---|---|
+| C-buffer | **Buffer de audio acumulado en idle**: en console `set_audio_enabled(False)` no detenía la captura → el `rtc.AudioStream` (C++) acumulaba backlog (medido 121s/72s/etc.) → STT transcribía ruido fantasma, flujo roto. Era OPACO (no purgable desde Python); el Ciclo 3 lo cerró como diagnóstico sin fix. | En room el track del cliente se **detacha** físicamente con el mic apagado → los frames se descartan (no hay backlog). | ✅ Resuelto |
+| C-away | **Away timer sobre método privado de LiveKit**: el away usaba `user_away_timeout` nativo + `session._set_user_away_timer()` (internal), y disparaba "no entendí" a los 0s (timer stale). | Reemplazado por un timer **propio** `asyncio.call_later`, VAD-aware (arma en Win+Z, cancela al `speaking`/`thinking`). Sin internals de LiveKit. | ✅ Resuelto (deuda saldada) |
+| C-orbe | **Orbe sin sync con la voz real**: documentado como "imposible" en console (audio en un proceso, dibujo en otro, sync fino sobre HTTP inviable). Estaba como backlog futuro (Electron/Tauri o browser-participante). | El modo room lo desbloqueó: el browser es participante del room, recibe el track TTS y mide el nivel real con Web Audio `AnalyserNode` (U5). El orbe late con la voz real. | ✅ Resuelto (no es más deuda) |
+
 ## Resumen de la deuda
 
 | # | Ítem | Dónde | Severidad |
 |---|------|-------|-----------|
 | D1 | Lógica de turno **duplicada** clásico vs LiveKit | `vc/app.py:_do_turn` y `lk/claude_llm.py` | Media-alta |
+| P1 | Path de Win+Z = **glue propio** (socket Unix + SSE), no primitiva LiveKit | `lk/agent.py` + `orb/orb_server.py` | Baja (pulido) |
+| P2 | Volumen de la respuesta **baja** en call de voz (echo-cancellation ducking del browser) | cliente orbe (`orb.html`) | Baja (pulido) |
+| P3 | Ruido de fondo: **BVC es Cloud-only**; en self-hosted está gateado a console | `lk/agent.py` | Baja (evaluar) |
 | D2 | Sin lint / typecheck / CI | repo | Media |
 | D3 | LiveKit **sin pin** en `pyproject.toml` | `pyproject.toml` | Media |
 | D4 | `is_goodbye` huérfana (código muerto testeado) | `vc/session.py` + `tests/test_pure.py` | Baja |
@@ -60,6 +80,50 @@ Orden sugerido por relación impacto/esfuerzo/riesgo. Todo es reversible y de ba
   que ambos modos invoquen, dejando a cada modo solo su transporte de audio. Hacerlo **con red**:
   `git baseline` + verificación en vivo (Win+Z), por ser código no runtime-testeable desde fuera.
 - **Nota**: dejar para el final porque es el único con riesgo real de regresión; los demás son seguros.
+- **Estado post-Ciclo 4**: SIGUE ABIERTA. El Ciclo 4 (migración a room) fue la oportunidad natural de
+  limpiarla, pero el ciclo se cerró sin tocar el flujo del turno (se priorizó estabilizar el transporte).
+  El default sigue siendo `lk/claude_llm.py` (turn handler de room) con el clásico (`vc/app.py`) como
+  fallback → el drift documentado en `CLAUDE.md` persiste.
+
+## Deuda de pulido del modo room (Ciclo 4) — baja prioridad
+
+Anotada en Build & Test del Ciclo 4 como **pulido, no blocker**. El sistema anda 10/10 sin esto.
+
+### P1 — Win+Z = glue propio (socket Unix + SSE)
+- **Impacto**: el control de Win+Z (press/say/stage) viaja por un socket Unix + el orbe lee estado por
+  SSE; no usa una primitiva nativa de LiveKit. Funciona, pero es código a mantener fuera del framework.
+- **Acción** (revisable): evaluar mover el control a un **data channel / RPC** de LiveKit (o full
+  client-side cuando se haga U4). No urgente.
+
+### P2 — Volumen de respuesta bajo (echo-cancellation)
+- **Impacto**: en call de voz el browser hace ducking por echo-cancellation y baja el volumen del TTS.
+- **Acción** (ajustable): tunear las constraints de audio del cliente (`orb.html`). Bajo esfuerzo.
+
+### P3 — Ruido de fondo / BVC Cloud-only
+- **Impacto**: `noise_cancellation.BVC()` requiere LiveKit Cloud; en self-hosted está gateado a console.
+  En room no hay cancelación de ruido del lado del agente.
+- **Acción** (evaluar): si el ruido molesta, considerar `ai_coustics` (alternativa self-host). No
+  aplicado todavía.
+
+## Latencia (NFR — no es regresión)
+
+El benchmark del Ciclo 4 (104 turnos reales, 2026-06-23) confirmó **sin regresión** de latencia con el
+cambio console → room (procesamiento real ≈ 2.5s, en línea con el baseline). El cuello que **queda** no
+es del transporte: **claude-mem corre hooks de memoria ~2s por turno** (más los picos de consultas
+pesadas a Claude). No es deuda nueva del Ciclo 4; es el techo de latencia conocido del cerebro.
+
+## Features diferidas (no deuda)
+
+- **U4 — wake "hey saga" en el cliente** (`onnxruntime-web`): DIFERIDO al final del Ciclo 4 y no
+  ejecutado (port más caro: cliente vs server-on-track). El modelo `hey_saga.onnx` (FPPH=0) ya existe;
+  hoy el trigger es Win+Z. Pendiente de retomar.
+
+## Ciclos futuros (decisiones de producto, no deuda)
+
+- **Ciclo 5 — saga agéntico**: darle "manos" (tools/MCPs). Primer paso ya dado en Ciclo 4 (prompt que
+  habilita el Bash built-in). Habilitar más tools/MCPs es viable con el `claude_daemon` caliente (el
+  cold-start que motivó el `--setting-sources ''` se paga una vez al arranque, no por turno).
+- **Ciclo 6 — speaker verification** ("solo mi voz"): DIFERIDO. No arrancado.
 
 ## Criterio transversal
 Cualquier ejecución de este plan debe terminar con verificación proporcional (`py_compile` +
