@@ -132,7 +132,10 @@ async def entry(ctx: "agents.JobContext") -> None:
         # prompt (como el flujo clásico). Sin esperar al modelo lingüístico.
         turn_handling={
             "turn_detection": "vad",
-            "endpointing": {"min_delay": 2.0, "max_delay": 4.0},
+            # min_delay = silencio que espera antes de cerrar el turno. 2s era poco -> una frase
+            # con pausas naturales se partía en varios turnos (chopping) y el primero se cancelaba.
+            # 3s da margen para pausar sin que corte. Cuesta ~1s más de latencia al final del turno.
+            "endpointing": {"min_delay": 3.0, "max_delay": 5.0},
             # Interrupción por VAD local (silero), NO "adaptive" (que es el default y
             # necesita LIVEKIT_API_KEY de la nube -> sin key fallaba al crear el detector
             # y rompía todo al apretar Win+Z mientras hablaba). vad = local, sin key.
@@ -141,6 +144,13 @@ async def entry(ctx: "agents.JobContext") -> None:
         # Si grabás y NO hablás en 6s, LiveKit marca al usuario "away" (mecanismo nativo,
         # basado en VAD real). Lo enganchamos abajo para volver a idle ('no entendí').
         user_away_timeout=6.0,
+        # OFF: la "preemptive generation" arranca el LLM sobre transcripts PARCIALES y lo
+        # cancela/reintenta cuando seguís hablando. Con nuestro LLM custom (bridge bloqueante
+        # al claude_daemon) ese cancel/restart deja el turno colgado SIN completar (se ve
+        # 'claude prompt' pero nunca 'claude daemon turn OK' -> turno perdido). Apagarlo hace
+        # que el LLM dispare solo con el transcript FINAL: un toque menos "instantáneo" pero
+        # confiable. El daemon caliente igual lo mantiene rápido.
+        preemptive_generation=False,
     )
 
     # Fase del flujo (gobierna qué hace Win+Z, igual que el flujo clásico):
@@ -236,6 +246,13 @@ async def entry(ctx: "agents.JobContext") -> None:
             session.input.set_audio_enabled(True)
             phase["v"] = "rec"
             orb_state("rec")           # "● Grabando"
+            # Resetear el away timer: que cuente 6s FRESCOS desde que abrís el mic. Sin esto, un
+            # timer stale del idle anterior dispara 'no entendí' al instante (away a los 0s).
+            # Método privado de la sesión -> try/except por robustez.
+            try:
+                session._set_user_away_timer()
+            except Exception:  # noqa: BLE001
+                pass
             _event("Win+Z -> GRABANDO (hablá)")
         elif p == "rec":
             # Cortar y MANDAR el turno ya (sin esperar el silencio).
