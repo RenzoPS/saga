@@ -107,6 +107,7 @@ let mode='idle', target=PH.idle, cur={col:[...PH.idle.col],E:PH.idle.energy,S:PH
 let transTimer=0;
 // comportamiento por estado: pesos que entran/salen suave + transientes
 let wScreen=0, wRec=0, wSpeak=0;
+let _ttsSmooth=0;   // U5: nivel TTS real suavizado (orbe sincronizado con la voz)
 let appear=0, appearTarget=1, flashV=0, wobbleV=0, absorbV=0, armed=false;
 let lift=0, liftTarget=0;   // panel abierto: la red sube y se achica (modo mini)
 
@@ -266,10 +267,19 @@ function frame(){
   for(let k=0;k<3;k++) cur.col[k]+=(target.col[k]-cur.col[k])*0.08;
   cur.E+=(target.energy-cur.E)*0.06; cur.S+=(target.speed-cur.S)*0.06;
   const [cr,cg,cb]=cur.col;
-  // nivel: audio REAL (mic/TTS) en grabando/hablando; simulado en el resto
-  // nivel stylized (envelope simulado por estado). NO recibe audio real -> sin desfase
-  // posible entre procesos. La intensidad la da cur.E (energía del estado).
-  const lvl=audioLevel(t,cur.E);
+  // nivel: SIEMPRE arranca del sintético (el orbe nunca queda plano). En 'speak', si el analyser
+  // del TTS está captando audio real, late ENCIMA con la voz real (U5). Robusto: si el analyser
+  // falla o da 0, queda el sintético -> siempre se mueve al hablar.
+  let lvl=audioLevel(t,cur.E);
+  if(mode==='speak'){
+    let real=0;
+    try{ if(window.__ttsLevel) real=window.__ttsLevel(); }catch(e){}
+    // suavizado LENTO -> la red sigue la ENVOLVENTE de la voz (sube/baja con las frases), no
+    // cada sílaba (eso parpadeaba). asimétrico: sube rápido (ataque), baja lento (release).
+    const k=(real>_ttsSmooth)?0.18:0.08;
+    _ttsSmooth+=(real-_ttsSmooth)*k;
+    if(_ttsSmooth>0.02) lvl=Math.max(lvl,Math.min(0.38,_ttsSmooth));   // techo: pulsa con la voz pero NO se infla
+  } else { _ttsSmooth*=0.85; }
 
   // pesos de comportamiento por estado. Ramp RAPIDO (0.2): el orbe reacciona al
   // audio en ~0.18s, no ~0.85s. Antes (0.06) la red no se movia hasta "despues".
@@ -468,17 +478,52 @@ function attachRemoteAudio(track){
   el.id = 'saga-tts-audio'; el.autoplay = true;
   document.body.appendChild(el);
   LOG('TTS track attached -> playing');
+  _setupTTSAnalyser(track);   // U5: medir el nivel real para sincronizar el orbe
 }
 
-// --- desbloqueo de autoplay: los browsers bloquean audio sin gesto del usuario ---
+// --- U5: Web Audio sobre el track TTS -> nivel REAL de la voz para que el orbe lata sincronizado.
+// El room nos da el track directo (en console era imposible: audio en otro proceso). ---
+let _audioCtx = null, _ttsAnalyser = null, _ttsData = null;
+function _setupTTSAnalyser(track){
+  try {
+    _audioCtx = _audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    // El AudioContext arranca 'suspended' (autoplay) -> sin esto el analyser no mide. Resume en
+    // el primer gesto (click/tecla) ademas del boton de unlock.
+    if (_audioCtx.state === 'suspended') {
+      const _resume = () => { try{ _audioCtx.resume(); }catch(e){}
+        document.removeEventListener('click', _resume); document.removeEventListener('keydown', _resume); };
+      document.addEventListener('click', _resume); document.addEventListener('keydown', _resume);
+    }
+    const ms = new MediaStream([track.mediaStreamTrack]);
+    const src = _audioCtx.createMediaStreamSource(ms);
+    _ttsAnalyser = _audioCtx.createAnalyser();
+    _ttsAnalyser.fftSize = 256;
+    _ttsAnalyser.smoothingTimeConstant = 0.85;   // más suave: envolvente, no jitter por-frame
+    src.connect(_ttsAnalyser);   // NO a destination: el <audio> ya reproduce; esto solo MIDE
+    _ttsData = new Uint8Array(_ttsAnalyser.fftSize);
+    // nivel RMS 0..1 del track TTS (volumen de la voz en vivo). El orbe lo lee al hablar.
+    window.__ttsLevel = () => {
+      if (!_ttsAnalyser) return 0;
+      _ttsAnalyser.getByteTimeDomainData(_ttsData);
+      let sum = 0;
+      for (let i=0;i<_ttsData.length;i++){ const x=(_ttsData[i]-128)/128; sum += x*x; }
+      return Math.min(1, Math.sqrt(sum/_ttsData.length) * 2.2);   // la voz tiene RMS bajo -> escalar (suave)
+    };
+    LOG('analyser TTS listo -> orbe sincronizado con la voz');
+  } catch (err) { LOG('no se pudo medir el TTS:', (err && err.message) || err); }
+}
+
+// --- desbloqueo de autoplay SIN botón: los browsers bloquean audio sin gesto del usuario, así que
+// lo desbloqueamos en el PRIMER gesto (click/tecla — total el usuario interactúa: Win+Z, clicks). ---
+let _unlockArmed = false;
 function showUnlock(r){
-  if (document.getElementById('audio-unlock')) return;
-  const b = document.createElement('button');
-  b.id = 'audio-unlock'; b.textContent = 'tocá para activar audio';
-  b.style.cssText = 'position:fixed;bottom:14px;left:50%;transform:translateX(-50%);z-index:50;'+
-    'padding:8px 14px;border-radius:10px;border:0;background:#1b2a3a;color:#cfe;font:14px system-ui;cursor:pointer';
-  b.onclick = async () => { try{ await r.startAudio(); }catch(e){} b.remove(); };
-  document.body.appendChild(b);
+  if (_unlockArmed) return; _unlockArmed = true;
+  const unlock = async () => {
+    try{ await r.startAudio(); }catch(e){}
+    try{ if(_audioCtx) await _audioCtx.resume(); }catch(e){}
+    document.removeEventListener('click', unlock); document.removeEventListener('keydown', unlock);
+  };
+  document.addEventListener('click', unlock); document.addEventListener('keydown', unlock);
 }
 
 // --- gate del mic por estado del orbe: 'rec' -> unmute, cualquier otro -> mute ---
