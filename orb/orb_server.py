@@ -42,6 +42,10 @@ from vc.config import (
 
 PORT = int(os.environ.get("ORB_PORT", "8777"))
 TOKEN = os.environ.get("ORB_TOKEN", "")          # vacio = sin auth (local)
+# Wake (U4): el cliente lee este flag del /token para decidir si publica el mic DESMUTEADO siempre
+# (wake ON: el server necesita oír "hey saga") o gateado por estado (wake OFF, default). OJO:
+# bool("0") es True -> comparar el valor real, no bool() sobre el env crudo.
+WAKE_ENABLED = os.environ.get("SAGA_WAKE_ENABLED", "0").strip().lower() in ("1", "true", "yes", "on")
 IDLE_TIMEOUT = 180.0                              # seg sin actividad -> vuelve a idle
 HERE = Path(__file__).resolve().parent
 HTML = HERE / "orb.html"
@@ -138,7 +142,8 @@ class Handler(BaseHTTPRequestHandler):
     def _serve_token(self):
         """Emite el JWT del cliente para unirse al room. GET /token?identity=&room=.
         Mintea con livekit.api (import lazy: el orbe en modo console nunca pega acá).
-        Respuesta: {"url": "ws://127.0.0.1:7880", "token": "<jwt>", "room": "saga"}."""
+        Respuesta: {"url": "ws://127.0.0.1:7880", "token": "<jwt>", "room": "saga", "wake": <bool>}.
+        `wake` (U4): si true, el cliente publica el mic DESMUTEADO siempre (el server oye "hey saga")."""
         if not LIVEKIT_API_KEY or not LIVEKIT_API_SECRET:
             self.send_error(500, "LIVEKIT_API_KEY/SECRET sin configurar (.env.local)")
             return
@@ -161,7 +166,9 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:  # noqa: BLE001 - degradar a 500 con causa
             self.send_error(500, f"no se pudo emitir el token: {e}")
             return
-        body = json.dumps({"url": LIVEKIT_URL, "token": token, "room": room}).encode()
+        body = json.dumps(
+            {"url": LIVEKIT_URL, "token": token, "room": room, "wake": WAKE_ENABLED}
+        ).encode()
         self._send_bytes(body, "application/json")
 
     def _serve_vendor(self, path: str):

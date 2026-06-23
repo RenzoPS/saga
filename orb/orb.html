@@ -464,13 +464,14 @@ frame();
 <!-- ===== Cliente de audio LiveKit (Ciclo 4, U3): el browser participa del room ===== -->
 <!-- Pide /token, se conecta al room, publica el mic MUTEADO (privacidad: no manda audio hasta
      'rec'), lo desmutea cuando el orbe entra en 'rec' (CustomEvent 'orbstate'), y reproduce el
-     track TTS que publica el worker. El wake en el cliente (U4) engancha el mismo unmute; el
-     orbe sync con AnalyserNode (U5) reusa el track TTS. -->
+     track TTS que publica el worker. Con wake ON (U4, flag del /token) el mic va DESMUTEADO
+     siempre (el server oye "hey saga" sobre el track); el orbe sync con AnalyserNode (U5) reusa
+     el track TTS. -->
 <script type="module">
 import { Room, RoomEvent, Track, createLocalAudioTrack } from 'livekit-client';
 
 const LOG = (...a) => console.log('[lk-client]', ...a);
-let room = null, micTrack = null;
+let room = null, micTrack = null, wakeEnabled = false;   // wake (U4): mic desmuteado siempre si ON
 
 // --- reproducir el TTS del worker (track remoto de audio) ---
 function attachRemoteAudio(track){
@@ -527,8 +528,11 @@ function showUnlock(r){
 }
 
 // --- gate del mic por estado del orbe: 'rec' -> unmute, cualquier otro -> mute ---
+// Con wake ON (U4) el gate NO aplica: el mic queda DESMUTEADO siempre para que el server oiga
+// "hey saga". El STT del worker igual está gateado server-side (set_audio_enabled) -> no procesa
+// hasta el wake; el detector de wake lee el track directo.
 window.addEventListener('orbstate', (e) => {
-  if (!micTrack) return;
+  if (!micTrack || wakeEnabled) return;
   const rec = e.detail === 'rec';
   try { rec ? micTrack.unmute() : micTrack.mute(); } catch(err){}
 });
@@ -537,8 +541,12 @@ async function publishMic(r){
   try {
     micTrack = await createLocalAudioTrack();      // pide permiso de mic (una vez)
     await r.localParticipant.publishTrack(micTrack);
-    await micTrack.mute();                          // arranca MUTEADO
-    LOG('mic publicado (muteado)');
+    if (wakeEnabled) {
+      LOG('mic publicado (DESMUTEADO: wake ON -> el server escucha "hey saga")');
+    } else {
+      await micTrack.mute();                        // arranca MUTEADO (default: privacidad)
+      LOG('mic publicado (muteado)');
+    }
   } catch (err) { LOG('no se pudo publicar el mic:', (err && err.message) || err); }
 }
 
@@ -547,8 +555,10 @@ async function start(){
   try {
     const res = await fetch('/token?identity=saga-client&room=saga');
     if (!res.ok) throw new Error('HTTP ' + res.status);
-    ({ url, token } = await res.json());
-    LOG('token OK ->', url);
+    let wake;
+    ({ url, token, wake } = await res.json());
+    wakeEnabled = !!wake;                           // U4: el server decide (SAGA_WAKE_ENABLED)
+    LOG('token OK ->', url, wakeEnabled ? '(wake ON)' : '');
   } catch (err) { LOG('no se pudo pedir el token:', (err && err.message) || err); return; }
 
   room = new Room({ adaptiveStream: true, dynacast: true });

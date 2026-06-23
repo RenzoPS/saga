@@ -20,7 +20,8 @@ Dos modos de transporte (mismo código; el subcomando decide):
   - ROOM (default, Ciclo 4): worker conectado a livekit-server. El audio llega por el
     track del BROWSER (cliente orbe). En room el track detached DESCARTA frames
     (room_io/_input.py) -> NO hay backlog (resuelve el bug del modo console). El wake
-    corre en el CLIENTE (onnxruntime-web, U4), no acá: el worker es headless.
+    (opt-in, U4) corre acá en el SERVER sobre el track del mic (WakeWordTrackDetector),
+    NO en el cliente: reusa el modelo Python en vez de portarlo a onnxruntime-web.
         .venv/bin/python lk/agent.py start      # usa LIVEKIT_URL/API_KEY/API_SECRET (.env.local)
   - CONSOLE (fallback dev): runtime de audio local, sin server. El wake server-side
     (mic local) SÍ corre acá. Tiene el bug del buffer conocido (ver Ciclo 3).
@@ -36,7 +37,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from livekit import agents
+from livekit import agents, rtc
 from livekit.agents import AgentServer, AgentSession, Agent, room_io
 from livekit.plugins import silero, deepgram   # deepgram: import a nivel módulo (el plugin
 # se registra al importar y DEBE ser en el main thread; importarlo tarde crashea)
@@ -45,7 +46,7 @@ from livekit.plugins.turn_detector.multilingual import MultilingualModel  # EOU 
 from dotenv import load_dotenv
 
 from lk.claude_llm import ClaudeCodeLLM
-from lk.wakeword import WakeWordDetector
+from lk.wakeword import WakeWordDetector, WakeWordTrackDetector
 from vc.attach import stage_text, clear_text
 from vc.claudecli import prewarm_claude
 from vc.config import CLAUDE_SYSTEM_PROMPT, LK_CTL_SOCK, ENV_FILE, LIVEKIT_AGENT_NAME
@@ -403,15 +404,42 @@ async def entry(ctx: "agents.JobContext") -> None:
     except OSError:
         pass
 
-    # Wake word server-side (opt-in: SAGA_WAKE_ENABLED=1) — SOLO en console. Abre el mic
-    # LOCAL del proceso (listener portaudio); en room el worker es headless (el audio llega
-    # por el track del browser), así que el wake corre en el CLIENTE (onnxruntime-web, U4).
-    # Al detectar "hey saga" llama _press() -> mismo flujo que Win+Z.
+    # Wake word server-side (opt-in: SAGA_WAKE_ENABLED=1). Al detectar "hey saga" -> _press()
+    # (mismo flujo que Win+Z). Dos transportes:
+    #   - console: mic LOCAL del proceso (portaudio) -> WakeWordDetector.
+    #   - room:    sobre el track del mic del BROWSER -> WakeWordTrackDetector (U4). El worker es
+    #              headless; el browser publica el mic DESMUTEADO (orb.html lee el flag `wake` del
+    #              /token). El STT sigue gateado por set_audio_enabled -> solo procesa tras el wake;
+    #              el detector lee el track directo (independiente de set_audio_enabled) -> oye siempre.
+    _wake = None
+    _wake_track = {"d": None}   # un solo detector aunque lleguen varios track_subscribed
     if _WAKE_ENABLED and _CONSOLE_MODE:
         _wake = WakeWordDetector(on_wake=_press)
         await _wake.start()
     elif _WAKE_ENABLED:
-        log("[lk] wake server-side OFF en modo room (corre en el cliente, U4).")
+        log("[lk] wake server-side ON (room): esperando el track del mic del browser.")
+
+        def _start_wake_on_track(track) -> None:
+            if _wake_track["d"] is not None:
+                return
+            det = WakeWordTrackDetector(track=track, on_wake=_press)
+            _wake_track["d"] = det
+            asyncio.create_task(det.start())
+
+        def _on_track_subscribed(track, publication, participant) -> None:
+            # Solo el mic del browser (no el TTS que publica el worker ni otros tracks).
+            if (track.kind == rtc.TrackKind.KIND_AUDIO
+                    and publication.source == rtc.TrackSource.SOURCE_MICROPHONE):
+                _start_wake_on_track(track)
+
+        ctx.room.on("track_subscribed", _on_track_subscribed)
+        # El mic puede haberse suscrito ANTES de registrar el handler (timing del dispatch):
+        # barrer los tracks ya presentes.
+        for p in ctx.room.remote_participants.values():
+            for pub in p.track_publications.values():
+                if (pub.track and pub.track.kind == rtc.TrackKind.KIND_AUDIO
+                        and pub.source == rtc.TrackSource.SOURCE_MICROPHONE):
+                    _start_wake_on_track(pub.track)
 
 
 if __name__ == "__main__":

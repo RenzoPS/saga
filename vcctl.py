@@ -212,6 +212,7 @@ def _ensure_agent_dispatched() -> bool:
     la race que rompía el auto-dispatch (una pestaña zombie creaba el room sin agente). Idempotente:
     si ya hay un dispatch del agente en el room, no duplica."""
     import asyncio
+    import time as _time
     from vc.config import (
         LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_ROOM, LIVEKIT_AGENT_NAME,
     )
@@ -234,13 +235,30 @@ def _ensure_agent_dispatched() -> bool:
         finally:
             await lk.aclose()
 
-    try:
-        res = asyncio.run(_go())
-        print(f"start: dispatch del agente '{LIVEKIT_AGENT_NAME}' -> room '{LIVEKIT_ROOM}' ({res})")
-        return True
-    except Exception as e:  # noqa: BLE001
-        print(f"start: NO pude despachar el agente por API: {e}")
-        return False
+    def _transient(e: Exception) -> bool:
+        # El server abre el puerto de signaling ANTES de tener su registro de nodos listo: el dispatch
+        # (Twirp API) puede dar 503 "no response from servers"/unavailable por unos cientos de ms,
+        # sobre todo tras un SIGKILL (arranque más lento). Es transitorio -> reintentar.
+        s = str(e).lower()
+        return "unavailable" in s or "503" in s or "no response from servers" in s
+
+    # Retry con backoff: ~6 intentos en ~5s. El worker ya registró -> apenas el server queda
+    # operativo, el create entra. Solo reintentamos el error transitorio; otros fallan rápido.
+    last = None
+    for i in range(6):
+        try:
+            res = asyncio.run(_go())
+            print(f"start: dispatch del agente '{LIVEKIT_AGENT_NAME}' -> room '{LIVEKIT_ROOM}' ({res})")
+            return True
+        except Exception as e:  # noqa: BLE001
+            last = e
+            if _transient(e) and i < 5:
+                print(f"start: server aún no listo para el dispatch (intento {i + 1}/6), reintento...")
+                _time.sleep(0.8)
+                continue
+            break
+    print(f"start: NO pude despachar el agente por API: {last}")
+    return False
 
 
 def _has_deepgram() -> bool:
@@ -366,9 +384,10 @@ def _start_room() -> int:
             return 1
     _wait_ready("livekit-server", lambda: _port_up(LIVEKIT_SIGNAL_PORT), 15)
 
-    # 2) cerebro caliente + 3) orbe (dedup-safe: si ya están, no-op)
+    # 2) cerebro caliente + 3) orbe (dedup-safe: si ya están, no-op). open_browser=False:
+    # el browser lo abre el paso 5 DESPUÉS del dispatch (si no, se abrían DOS pestañas).
     prewarm_claude()
-    ensure_orb()
+    ensure_orb(open_browser=False)
 
     _wait_ready("claude", lambda: _sock_up(str(CLAUDE_SOCK)), 30)
     _wait_ready("orb", lambda: _port_up(ORB_PORT), 10)

@@ -23,8 +23,11 @@ def _orb_up() -> bool:
         return False
 
 
-def ensure_orb() -> None:
-    """Levanta el server del orbe si no corre y abre la pestaña esa primera vez."""
+def ensure_orb(open_browser: bool = True) -> None:
+    """Levanta el server del orbe si no corre y abre la pestaña esa primera vez.
+
+    open_browser=False: solo asegura el server, NO abre el browser. Lo usa el modo room
+    (_start_room) que abre la pestaña él mismo DESPUÉS del dispatch -> evita la doble pestaña."""
     if _orb_up():
         return
     try:
@@ -42,6 +45,8 @@ def ensure_orb() -> None:
         if _orb_up():
             break
         time.sleep(0.1)
+    if not open_browser:
+        return
     # server recien levantado -> abrir pestaña una vez
     try:
         subprocess.Popen(
