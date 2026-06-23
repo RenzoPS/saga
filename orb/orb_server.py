@@ -37,7 +37,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 from vc.config import (
     ATTACH_IMG_PATH, LK_CTL_SOCK,
-    LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_ROOM,
+    LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_ROOM, LIVEKIT_AGENT_NAME,
 )
 
 PORT = int(os.environ.get("ORB_PORT", "8777"))
@@ -151,6 +151,11 @@ class Handler(BaseHTTPRequestHandler):
                 api.AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
                 .with_identity(identity)
                 .with_grants(api.VideoGrants(room_join=True, room=room))
+                # Dispatch EXPLÍCITO: el server despacha al agente nombrado cuando este cliente
+                # crea/entra al room -> no depende de que el worker esté listo antes (auto-dispatch).
+                .with_room_config(api.RoomConfiguration(
+                    agents=[api.RoomAgentDispatch(agent_name=LIVEKIT_AGENT_NAME)]
+                ))
                 .to_jwt()
             )
         except Exception as e:  # noqa: BLE001 - degradar a 500 con causa

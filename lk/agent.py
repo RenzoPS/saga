@@ -47,7 +47,7 @@ from lk.claude_llm import ClaudeCodeLLM
 from lk.wakeword import WakeWordDetector
 from vc.attach import stage_text, clear_text
 from vc.claudecli import prewarm_claude
-from vc.config import CLAUDE_SYSTEM_PROMPT, LK_CTL_SOCK, ENV_FILE
+from vc.config import CLAUDE_SYSTEM_PROMPT, LK_CTL_SOCK, ENV_FILE, LIVEKIT_AGENT_NAME
 from vc.orb import ensure_orb, orb_state
 from vc.runtime import log
 
@@ -103,7 +103,10 @@ class Assistant(Agent):
 server = AgentServer()
 
 
-@server.rtc_session()
+# agent_name -> el worker se registra como agente NOMBRADO (no auto-dispatch). Se despacha solo
+# cuando el token del cliente lo pide explícitamente (ver /token en orb_server). Robustece el
+# dispatch contra el orden de arranque / pestañas zombie. En console (sin server) se ignora.
+@server.rtc_session(agent_name=LIVEKIT_AGENT_NAME)
 async def entry(ctx: "agents.JobContext") -> None:
     global _ctl_server
     ensure_orb()       # orbe (idéntico a vc/)

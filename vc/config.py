@@ -188,6 +188,21 @@ LIVEKIT_URL = os.environ.get("LIVEKIT_URL", "ws://127.0.0.1:7880")
 LIVEKIT_API_KEY = os.environ.get("LIVEKIT_API_KEY", "")
 LIVEKIT_API_SECRET = os.environ.get("LIVEKIT_API_SECRET", "")
 LIVEKIT_ROOM = os.environ.get("LIVEKIT_ROOM", "saga")
+# Nombre del agente para DISPATCH EXPLÍCITO (Ciclo 4): el worker se registra con este nombre y el
+# token del cliente pide explícitamente este agente (RoomConfiguration/RoomAgentDispatch). Así el
+# server lo despacha al entrar el cliente, SIN depender de que el worker esté listo antes de crear
+# el room (lo que rompía el auto-dispatch: una pestaña vieja creaba el room y no había agente).
+LIVEKIT_AGENT_NAME = os.environ.get("LIVEKIT_AGENT_NAME", "saga")
+
+# Server room (Ciclo 4, U6): binario NATIVO + su config. saga-ctl lo levanta/baja en modo room.
+# (Se usa el binario, NO Docker: el NAT de Docker rompía el WebRTC local — ver aidlc-docs.)
+LIVEKIT_SERVER_BIN = HOME / ".local/bin/livekit-server"
+LIVEKIT_CONFIG = PROJECT_DIR / "livekit.yaml"
+LK_SERVER_LOG = PROJECT_DIR / "livekit_server.log"
+LIVEKIT_SIGNAL_PORT = 7880   # signaling (loopback) — readiness del server
+# Transporte de audio cuando LIVEKIT_ENABLED: 'room' (default: server local + browser cliente) o
+# 'console' (fallback dev: audio local en el proceso, sin server). saga-ctl rutea por esto.
+SAGA_TRANSPORT = os.environ.get("SAGA_TRANSPORT", "room").strip().lower()
 
 MONITOR_CLASS = "saga-monitor"
 MONITOR_WORKSPACE = 10
