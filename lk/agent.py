@@ -51,6 +51,12 @@ from vc.config import CLAUDE_SYSTEM_PROMPT, LK_CTL_SOCK, ENV_FILE, LIVEKIT_AGENT
 from vc.orb import ensure_orb, orb_state
 from vc.runtime import log
 
+
+def _event(msg: str) -> None:
+    """Evento del flujo (Win+Z / wake / silencio / estados) destacado en el monitor.
+    El prefijo lo hace fácil de seguir entre el ruido de métricas."""
+    log(f"  ▎ {msg}")
+
 # Cargar secretos (DEEPGRAM_API_KEY) del .env.local gitignored. El default sólido es
 # Deepgram; si NO hay key, el código cae solo a whisper/edge (no es config seteable).
 load_dotenv(ENV_FILE)
@@ -153,7 +159,7 @@ async def entry(ctx: "agents.JobContext") -> None:
             session.clear_user_turn()
             phase["v"] = "idle"
             orb_state("cancel")
-            log("[lk] usuario 'away' (sin voz 6s) -> 'no entendí', vuelvo a idle")
+            _event("SILENCIO 6s sin voz -> no te entendí, vuelvo a idle")
 
     @session.on("agent_state_changed")
     def _on_agent_state(ev) -> None:
@@ -164,15 +170,17 @@ async def entry(ctx: "agents.JobContext") -> None:
             # el VAD cerró solo -> apagar mic y pasar a procesar.
             if phase["v"] == "rec":
                 session.input.set_audio_enabled(False)
-                log("[lk] silencio -> fin de turno, procesando")
+                _event("SILENCIO detectado -> fin de turno, proceso")
             phase["v"] = "busy"
-            # 'thinking' = Whisper ya terminó y Claude está pensando. 'speaking' = hablando.
+            # 'thinking' = el STT terminó y Claude está pensando. 'speaking' = hablando.
+            _event("PENSANDO..." if st == "thinking" else "HABLANDO")
             orb_state("think" if st == "thinking" else "speak")
         elif st in ("listening", "idle"):
             # Agente quieto. Sólo significa "terminó de responder" si estábamos ocupados;
             # si estamos grabando, el agente está "listening" esperándote -> no tocar.
             if phase["v"] == "busy":
                 phase["v"] = "idle"
+                _event("listo -> idle")
                 orb_state("idle")
 
     @session.on("metrics_collected")
@@ -228,14 +236,14 @@ async def entry(ctx: "agents.JobContext") -> None:
             session.input.set_audio_enabled(True)
             phase["v"] = "rec"
             orb_state("rec")           # "● Grabando"
-            log("[lk] Win+Z -> grabar")
+            _event("Win+Z -> GRABANDO (hablá)")
         elif p == "rec":
             # Cortar y MANDAR el turno ya (sin esperar el silencio).
             session.input.set_audio_enabled(False)
             phase["v"] = "busy"
             orb_state("think")   # STT (Deepgram) es instantáneo -> directo a Pensando
             session.commit_user_turn(transcript_timeout=10.0)
-            log("[lk] Win+Z -> cortar y mandar")
+            _event("Win+Z -> CORTÉ, mando el turno")
         else:  # busy
             # Matar la respuesta/proceso en curso y volver a idle (con animación cancel).
             session.interrupt(force=True)   # corta TTS + cancela el LLM (Claude)
@@ -243,7 +251,7 @@ async def entry(ctx: "agents.JobContext") -> None:
             session.input.set_audio_enabled(False)
             phase["v"] = "idle"
             orb_state("cancel")             # animación de cancelado -> vuelve a idle solo
-            log("[lk] Win+Z -> matar (cancelado)")
+            _event("Win+Z -> CANCELADO (maté la respuesta)")
 
     def _say(text: str) -> None:
         """Prompt directo por TEXTO (Shift+Enter en el panel del orbe): dispara un turno
@@ -257,7 +265,7 @@ async def entry(ctx: "agents.JobContext") -> None:
         phase["v"] = "busy"
         orb_state("think")
         session.generate_reply(user_input=text)      # user_input -> ClaudeCodeLLM lee el último turno
-        log("[lk] prompt por texto -> turno inmediato")
+        _event("Texto (Shift+Enter) -> turno inmediato")
 
     async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
