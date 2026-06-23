@@ -41,6 +41,7 @@ from livekit.agents import AgentServer, AgentSession, Agent, room_io
 from livekit.plugins import silero, deepgram   # deepgram: import a nivel módulo (el plugin
 # se registra al importar y DEBE ser en el main thread; importarlo tarde crashea)
 from livekit.plugins import noise_cancellation   # BVC: saca ruido + voces de fondo del mic
+from livekit.plugins.turn_detector.multilingual import MultilingualModel  # EOU semántico (anti-chopping)
 from dotenv import load_dotenv
 
 from lk.claude_llm import ClaudeCodeLLM
@@ -130,27 +131,25 @@ async def entry(ctx: "agents.JobContext") -> None:
         tts=_build_tts(),      # Deepgram Aura por default; edge-tts si no hay key
         # Fin de turno por SILENCIO (VAD): ~2s de silencio cierra el turno y manda el
         # prompt (como el flujo clásico). Sin esperar al modelo lingüístico.
+        # TODA la config de turnos va ACÁ (los params top-level tipo preemptive_generation/
+        # min_endpointing_delay están DEPRECADOS y se ignoran cuando se pasa turn_handling).
         turn_handling={
-            "turn_detection": "vad",
-            # min_delay = silencio que espera antes de cerrar el turno. 2s era poco -> una frase
-            # con pausas naturales se partía en varios turnos (chopping) y el primero se cancelaba.
-            # 3s da margen para pausar sin que corte. Cuesta ~1s más de latencia al final del turno.
-            "endpointing": {"min_delay": 3.0, "max_delay": 5.0},
-            # Interrupción por VAD local (silero), NO "adaptive" (que es el default y
-            # necesita LIVEKIT_API_KEY de la nube -> sin key fallaba al crear el detector
-            # y rompía todo al apretar Win+Z mientras hablaba). vad = local, sin key.
+            # Turn detector SEMÁNTICO (modelo EOU multilingüe, soporta español): decide si TERMINASTE
+            # de hablar por el SENTIDO de la frase, no solo por el silencio. Anti-chopping.
+            "turn_detection": MultilingualModel(),
+            # min_delay = piso de silencio antes de cerrar el turno (aún con el modelo). 2s da margen
+            # para seguir hablando entre sub-frases -> el modelo + 2s evitan partir el turno.
+            "endpointing": {"min_delay": 2.0, "max_delay": 6.0},
+            # Interrupción por VAD local (silero), NO "adaptive" (default, que necesita LIVEKIT_API_KEY
+            # de la nube -> sin key fallaba al apretar Win+Z mientras hablaba). vad = local, sin key.
             "interruption": {"mode": "vad"},
+            # preemptive generation OFF: arranca el LLM sobre transcripts PARCIALES y lo cancela/reintenta
+            # al seguir hablando. Con el LLM custom (bridge bloqueante al claude_daemon) eso hace
+            # multi-commit -> turnos partidos/cancelados sin respuesta. Acá VA DENTRO de turn_handling
+            # (el top-level está deprecado y NO tenía efecto). El daemon caliente igual lo mantiene rápido.
+            "preemptive_generation": {"enabled": False},
         },
-        # (El timeout "no hablaste -> no te entendí" lo manejamos con un timer PROPIO abajo,
-        # VAD-aware, en vez del user_away_timeout nativo: no requiere métodos privados para
-        # resetearlo al abrir el mic con Win+Z.)
-        # OFF: la "preemptive generation" arranca el LLM sobre transcripts PARCIALES y lo
-        # cancela/reintenta cuando seguís hablando. Con nuestro LLM custom (bridge bloqueante
-        # al claude_daemon) ese cancel/restart deja el turno colgado SIN completar (se ve
-        # 'claude prompt' pero nunca 'claude daemon turn OK' -> turno perdido). Apagarlo hace
-        # que el LLM dispare solo con el transcript FINAL: un toque menos "instantáneo" pero
-        # confiable. El daemon caliente igual lo mantiene rápido.
-        preemptive_generation=False,
+        # (El timeout "no hablaste -> no te entendí" lo maneja un timer PROPIO abajo, VAD-aware.)
     )
 
     # Fase del flujo (gobierna qué hace Win+Z, igual que el flujo clásico):
@@ -158,6 +157,9 @@ async def entry(ctx: "agents.JobContext") -> None:
     #   rec   -> grabando tu voz (mic abierto)
     #   busy  -> procesando: transcribiendo / pensando / hablando
     phase = {"v": "idle"}
+    # ¿el turno llegó a HABLAR? Si pasó a thinking pero nunca a speaking = turno vacío (no se dijo
+    # nada / sin prompt) -> mostramos 'error' (amarillo "no te entendí") en vez de volver mudo a idle.
+    spoke = {"v": False}
 
     # Timer PROPIO de "abriste el mic y no hablaste -> no te entendí". Reemplaza el
     # user_away_timeout nativo (que obligaba a resetear con un método privado al abrir el mic).
@@ -186,6 +188,33 @@ async def entry(ctx: "agents.JobContext") -> None:
             orb_state("error")   # AMARILLO "No te entendí" (no el rojo de 'cancel'): es lo correcto acá
             _event(f"SILENCIO {int(_NO_SPEECH_TIMEOUT)}s sin voz -> no te entendí, vuelvo a idle")
 
+    # Watchdog de seguridad: si el turno queda colgado en 'busy' (thinking) SIN llegar a hablar
+    # (LLM/daemon trabado, transcript que nunca llega, etc.), destraba a idle con 'no te entendí'
+    # en vez de quedar pegado. Se arma al entrar a procesar, se cancela al hablar o resolver.
+    _PROC_TIMEOUT = 18.0
+    _busy = {"h": None}
+
+    def _cancel_busy() -> None:
+        if _busy["h"] is not None:
+            _busy["h"].cancel()
+            _busy["h"] = None
+
+    def _arm_busy() -> None:
+        _cancel_busy()
+        _busy["h"] = loop.call_later(_PROC_TIMEOUT, _busy_fire)
+
+    def _busy_fire() -> None:
+        _busy["h"] = None
+        if phase["v"] == "busy" and not spoke["v"]:   # colgado procesando, nunca habló
+            try: session.interrupt(force=True)
+            except Exception: pass
+            try: session.clear_user_turn()
+            except Exception: pass
+            session.input.set_audio_enabled(False)
+            phase["v"] = "idle"
+            orb_state("error")
+            _event(f"turno colgado {int(_PROC_TIMEOUT)}s sin respuesta -> no te entendí")
+
     @session.on("user_state_changed")
     def _on_user_state(ev) -> None:
         # Empezaste a hablar (VAD real) -> cancelar el timeout de 'no hablaste'.
@@ -203,6 +232,12 @@ async def entry(ctx: "agents.JobContext") -> None:
             if phase["v"] == "rec":
                 session.input.set_audio_enabled(False)
                 _event("SILENCIO detectado -> fin de turno, proceso")
+            if st == "thinking":
+                spoke["v"] = False     # turno nuevo: todavía no respondió nada
+                _arm_busy()            # watchdog: destrabar si se cuelga procesando
+            else:
+                spoke["v"] = True      # llegó a 'speaking' -> hubo respuesta de verdad
+                _cancel_busy()
             phase["v"] = "busy"
             # 'thinking' = el STT terminó y Claude está pensando. 'speaking' = hablando.
             _event("PENSANDO..." if st == "thinking" else "HABLANDO")
@@ -211,9 +246,16 @@ async def entry(ctx: "agents.JobContext") -> None:
             # Agente quieto. Sólo significa "terminó de responder" si estábamos ocupados;
             # si estamos grabando, el agente está "listening" esperándote -> no tocar.
             if phase["v"] == "busy":
+                _cancel_busy()
                 phase["v"] = "idle"
+                # NOTA: acá NO mostramos "no te entendí" aunque no haya hablado. Un turno puede ir
+                # thinking->listening sin speaking por CHOPPING (lo canceló un turno nuevo), no por
+                # estar vacío -> mostrar error acá daba falsos positivos en frases con pausas. El
+                # caso de turno REALMENTE vacío se cubre en _press (rapid Win+Z sin hablar) y en el
+                # watchdog (_busy_fire) si queda colgado. Acá, simplemente volvemos a idle.
                 _event("listo -> idle")
                 orb_state("idle")
+                spoke["v"] = False
 
     @session.on("metrics_collected")
     def _on_metrics(ev) -> None:
@@ -271,16 +313,27 @@ async def entry(ctx: "agents.JobContext") -> None:
             _arm_away()                # arranca el timeout 'abriste el mic y no hablaste' (6s frescos)
             _event("Win+Z -> GRABANDO (hablá)")
         elif p == "rec":
-            # Cortar y MANDAR el turno ya (sin esperar el silencio).
+            # ¿Hablaste? El away timer se cancela al detectar voz (user_state 'speaking'). Si SIGUE
+            # armado, nunca hablaste -> cortar fue un turno VACÍO: no mandar nada, mostrar 'no te
+            # entendí' al toque (evita el cuelgue de comitear un turno sin transcript).
+            never_spoke = _away["h"] is not None
             _cancel_away()
             session.input.set_audio_enabled(False)
-            phase["v"] = "busy"
-            orb_state("think")   # STT (Deepgram) es instantáneo -> directo a Pensando
-            session.commit_user_turn(transcript_timeout=10.0)
-            _event("Win+Z -> CORTÉ, mando el turno")
+            if never_spoke:
+                session.clear_user_turn()
+                phase["v"] = "idle"
+                orb_state("error")
+                _event("Win+Z -> cortaste sin hablar -> no te entendí")
+            else:
+                # Cortar y MANDAR el turno ya (sin esperar el silencio).
+                phase["v"] = "busy"
+                orb_state("think")   # STT (Deepgram) es instantáneo -> directo a Pensando
+                session.commit_user_turn(transcript_timeout=10.0)
+                _event("Win+Z -> CORTÉ, mando el turno")
         else:  # busy
             # Matar la respuesta/proceso en curso y volver a idle (con animación cancel).
             _cancel_away()
+            _cancel_busy()
             session.interrupt(force=True)   # corta TTS + cancela el LLM (Claude)
             session.clear_user_turn()
             session.input.set_audio_enabled(False)

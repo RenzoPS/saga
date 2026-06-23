@@ -99,6 +99,8 @@ class ClaudeProc:
             res = self._one_turn(prompt, image_b64, send_delta)
             if res == "ok":
                 return True
+            if res == "cancelled":
+                return True   # cancelado por el cliente: turno MANEJADO, NO reintentar el prompt
             if attempt == 1 and res in ("session_error", "dead"):
                 log(f"turno falló ({res}) -> respawn sesión fresca + reintento")
                 self.spawn(fresh=True)
@@ -124,7 +126,6 @@ class ClaudeProc:
         except (BrokenPipeError, OSError):
             return "dead"
 
-        client_gone = False
         deadline = time.monotonic() + CLAUDE_DAEMON_TURN_TIMEOUT_S
         while True:
             remaining = deadline - time.monotonic()
@@ -152,9 +153,14 @@ class ClaudeProc:
                     d = ev.get("delta", {})
                     if d.get("type") == "text_delta":
                         txt = d.get("text", "")
-                        if txt and not client_gone:
-                            if not send_delta(txt):   # cliente se fue (cancel)
-                                client_gone = True     # drenamos hasta 'result'
+                        if txt and not send_delta(txt):
+                            # El cliente CANCELÓ (cerró el socket) -> ABORTAR el turno YA, no drenar:
+                            # mato el grupo entero (claude + subspawns de claude-mem) -> daemon libre,
+                            # SIN zombie ni huérfanos. El próximo turno respawnea con --resume (el
+                            # contexto hasta el último turno COMPLETO se mantiene; el abortado no se guardó).
+                            log("cliente canceló -> mato el turno en curso (respawn --resume en el próximo)")
+                            self.kill()
+                            return "cancelled"
             elif typ == "result":
                 if o.get("is_error"):              # ej: "No conversation found" -> sesión muerta
                     return "session_error"
