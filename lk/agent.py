@@ -16,8 +16,15 @@ Win+Z (otro proceso) habla con el agente por un socket Unix (LK_CTL_SOCK) mandan
 "press"; el server del socket corre en el MISMO loop que la sesión -> llama la API
 de LiveKit directo.
 
-Correr local, sin servidor ni cuenta:
-    .venv/bin/python lk/agent.py console
+Dos modos de transporte (mismo código; el subcomando decide):
+  - ROOM (default, Ciclo 4): worker conectado a livekit-server. El audio llega por el
+    track del BROWSER (cliente orbe). En room el track detached DESCARTA frames
+    (room_io/_input.py) -> NO hay backlog (resuelve el bug del modo console). El wake
+    corre en el CLIENTE (onnxruntime-web, U4), no acá: el worker es headless.
+        .venv/bin/python lk/agent.py start      # usa LIVEKIT_URL/API_KEY/API_SECRET (.env.local)
+  - CONSOLE (fallback dev): runtime de audio local, sin server. El wake server-side
+    (mic local) SÍ corre acá. Tiene el bug del buffer conocido (ver Ciclo 3).
+        .venv/bin/python lk/agent.py console
 """
 
 import os
@@ -51,6 +58,9 @@ _HAS_DEEPGRAM = bool(os.environ.get("DEEPGRAM_API_KEY"))
 # OJO: bool("0") es True en Python -> NO usar bool() sobre el env crudo (SAGA_WAKE_ENABLED=0
 # quedaba activo). Comparar el valor real.
 _WAKE_ENABLED = os.environ.get("SAGA_WAKE_ENABLED", "0").strip().lower() in ("1", "true", "yes", "on")
+# Modo de transporte = el subcomando con el que se lanza. `console` -> audio local (fallback);
+# cualquier otro (`start`/`dev`) -> room (worker conectado al server, default Ciclo 4).
+_CONSOLE_MODE = "console" in sys.argv
 
 # Voz por default (Aura-2 español, neutra). Constante, no env: arquitectura sólida.
 _DEEPGRAM_VOICE = "aura-2-gloria-es"
@@ -178,22 +188,32 @@ async def entry(ctx: "agents.JobContext") -> None:
         log("[metrics] " + "  ".join(parts))
 
     # Cancelación de ruido en el INPUT (BVC = Krisp): saca ruido y voces/sonidos de
-    # fondo (guitarra, música, otra gente) ANTES del VAD/STT -> el corte por silencio
-    # deja de dispararse con sonido ambiente. Si no carga, sigue sin cancelación.
-    try:
-        _nc = noise_cancellation.BVC()
-    except Exception as e:  # noqa: BLE001
-        log(f"[lk] noise cancellation OFF ({type(e).__name__})")
-        _nc = None
+    # fondo ANTES del VAD/STT. OJO: BVC necesita LiveKit Cloud -> en el server self-hosted
+    # (modo room) NO se puede habilitar ("audio filter cannot be enabled: LiveKit Cloud is
+    # required") y ensucia el pipeline. Solo en console. En room nos apoyamos en el VAD Silero
+    # (activation_threshold 0.7) para el ruido. BVC()=construye OK pero falla al APLICARSE ->
+    # por eso se gatea por modo, no por try/except.
+    _nc = None
+    if _CONSOLE_MODE:
+        try:
+            _nc = noise_cancellation.BVC()
+        except Exception as e:  # noqa: BLE001
+            log(f"[lk] noise cancellation OFF ({type(e).__name__})")
+            _nc = None
     await session.start(
         agent=Assistant(),
         room=ctx.room,
-        room_input_options=room_io.RoomInputOptions(noise_cancellation=_nc),
+        # API actual de livekit-agents 1.6 (RoomInputOptions/RoomOutputOptions están deprecados):
+        # noise_cancellation vive ahora en RoomOptions.audio_input.
+        room_options=room_io.RoomOptions(
+            audio_input=room_io.AudioInputOptions(noise_cancellation=_nc),
+        ),
     )
 
     # Arrancar con el mic APAGADO: el agente NO escucha hasta que apretás Win+Z.
     session.input.set_audio_enabled(False)
     orb_state("idle")
+    log(f"[lk] transporte: {'console (audio local)' if _CONSOLE_MODE else 'room (track del browser)'}")
     log("[lk] agente listo. Win+Z: graba / corta y manda / mata. Silencio 2s también manda.")
 
     # ── Win+Z (un solo comando "press"): el agente decide según la fase ──
@@ -283,11 +303,15 @@ async def entry(ctx: "agents.JobContext") -> None:
     except OSError:
         pass
 
-    # Wake word (opt-in: SAGA_WAKE_ENABLED=1). Corre en background, fuera del response
-    # path. Al detectar "hey saga" llama _press() -> mismo flujo que Win+Z.
-    if _WAKE_ENABLED:
+    # Wake word server-side (opt-in: SAGA_WAKE_ENABLED=1) — SOLO en console. Abre el mic
+    # LOCAL del proceso (listener portaudio); en room el worker es headless (el audio llega
+    # por el track del browser), así que el wake corre en el CLIENTE (onnxruntime-web, U4).
+    # Al detectar "hey saga" llama _press() -> mismo flujo que Win+Z.
+    if _WAKE_ENABLED and _CONSOLE_MODE:
         _wake = WakeWordDetector(on_wake=_press)
         await _wake.start()
+    elif _WAKE_ENABLED:
+        log("[lk] wake server-side OFF en modo room (corre en el cliente, U4).")
 
 
 if __name__ == "__main__":

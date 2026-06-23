@@ -172,6 +172,23 @@ LK_CTL_SOCK = Path("/tmp/saga-lk-ctl.sock")
 # default; si no hay key, cae solo a whisper/edge). Acá solo vive el secreto.
 ENV_FILE = PROJECT_DIR / ".env.local"
 
+# Cargamos .env.local acá (no solo en el agente) para que CUALQUIER importador de config
+# —incluido orb_server, que mintea el JWT en /token— vea LIVEKIT_API_KEY/SECRET y demás.
+# load_dotenv es idempotente y no pisa env ya seteadas; si falta dotenv, se degrada en silencio.
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv(ENV_FILE)
+except Exception:
+    pass
+
+# Transporte room (Ciclo 4). El worker (lk/agent.py) y el token endpoint (orb_server) leen
+# de acá. URL/room tienen default local; las keys viven SOLO en .env.local (secreto). El
+# server bindea a loopback (livekit.yaml) -> nada sale de la máquina.
+LIVEKIT_URL = os.environ.get("LIVEKIT_URL", "ws://127.0.0.1:7880")
+LIVEKIT_API_KEY = os.environ.get("LIVEKIT_API_KEY", "")
+LIVEKIT_API_SECRET = os.environ.get("LIVEKIT_API_SECRET", "")
+LIVEKIT_ROOM = os.environ.get("LIVEKIT_ROOM", "saga")
+
 MONITOR_CLASS = "saga-monitor"
 MONITOR_WORKSPACE = 10
 
