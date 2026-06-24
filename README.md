@@ -115,14 +115,15 @@ Después `hyprctl reload`.
 ## Correr
 
 ```bash
-saga-ctl start      # levanta TODO: server nativo + Claude + orbe + worker + dispatch + browser
+saga-ctl start      # levanta TODO: server nativo + Claude + orbe + worker + browser
 saga-ctl status     # ver modo, stack (Deepgram vs fallback) y procesos (server/worker/daemon/orbe)
 saga-ctl stop       # apagar todo (incluido el binario del server)
 ```
 
 `saga-ctl start` arranca las piezas en orden con readiness por pieza: el server LiveKit
-nativo, el cerebro (`claude_daemon`), el orbe (`orb_server`), el worker (`lk/agent.py
-start`), despacha el agente al room por API y abre el browser cliente.
+nativo (fresco), el cerebro (`claude_daemon`), el orbe (`orb_server`), el worker (`lk/agent.py
+start`, fresco), y abre el browser cliente. El worker se despacha SOLO (dispatch automático) cuando
+el browser se une al room; saga-ctl espera a que el socket de control del agente responda.
 
 ### Uso (Win+Z, push-to-talk de 3 fases)
 - **idle → Win+Z**: empieza a grabar (orbe "Grabando").
@@ -172,12 +173,12 @@ Modo room (único) — topología **server LiveKit ↔ browser cliente (orbe) �
   loopback (`:7880`), media UDP en `:7882`. `saga-ctl` auto-detecta `NODE_IP` (IP de LAN) e
   inyecta las keys (`LIVEKIT_KEYS`) por env. No Docker: el NAT rompe el WebRTC local.
 - **Cliente** (`orb/orb.html`): browser con el LiveKit JS SDK (vendoreado en
-  `orb/vendor/livekit/`). Pide el JWT a `/token`, se une al room, publica el mic (muteado;
-  desmutea al grabar), recibe el track TTS y lo reproduce; el orbe late con el nivel real
-  de la voz (Web Audio `AnalyserNode`).
-- **Token + dispatch**: `orb/orb_server.py` `/token` mintea el JWT; `saga-ctl` despacha el
-  agente al room por API (`AgentDispatchService.create_dispatch`) → el agente entra ANTES
-  que el browser (robusto contra timing/pestañas zombie).
+  `orb/vendor/livekit/`). Pide el JWT a `/token`, se une al room (esto crea el room y dispara el
+  dispatch automático del worker), publica el mic (muteado; desmutea al grabar), recibe el track TTS
+  y lo reproduce; el orbe late con el nivel real de la voz (Web Audio `AnalyserNode`).
+- **Token + dispatch**: `orb/orb_server.py` `/token` mintea el JWT (solo para unirse). El worker se
+  despacha SOLO (dispatch automático nativo: `@server.rtc_session()` sin `agent_name`, worker con
+  `load_fnc=0`) cuando el browser entra al room. Ya no se despacha por API.
 
 Paquete `lk/` (worker):
 
@@ -193,8 +194,9 @@ Soporte (paquete `vc/`, reusado): `config` (paths/secretos) · `claudecli` +
 `desktop` (grim/Hyprland) · `runtime` · `session`. (`wake_daemon.py`/Vosk queda dormido,
 fuera de scope.)
 
-Control: `vcctl.py` (`saga-ctl`) orquesta el arranque (`_start_room`: server → daemon →
-orbe → worker → dispatch → browser), abre el monitor y espera readiness por pieza. Win+Z
+Control: `vcctl.py` (`saga-ctl`) orquesta el arranque (`_start_room`: server fresco → daemon →
+orbe → worker fresco → browser → wait del socket de control), abre el monitor y espera readiness por
+pieza. El browser, al unirse al room, dispara el dispatch automático del worker. Win+Z
 (`vc/app.py` → `_livekit_press`) le manda `press` al socket del agente.
 
 ## Privacidad
