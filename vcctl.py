@@ -31,10 +31,6 @@ DAEMONS = ("wake_daemon.py", "claude_daemon.py", "orb_server.py")
 # Sockets + temporales a borrar en stop (sin tocar el beep, que se regenera).
 TMP_FILES = (
     "/tmp/saga-claude.sock",
-    "/tmp/saga.pid",
-    "/tmp/saga.lock",
-    "/tmp/saga.abort",
-    "/tmp/saga.wav",
     "/tmp/saga-lk-ctl.sock",   # socket de control del agente LiveKit (push-to-talk)
 )
 

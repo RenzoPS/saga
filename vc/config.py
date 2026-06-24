@@ -7,8 +7,6 @@ from pathlib import Path
 
 HOME = Path.home()
 PROJECT_DIR = HOME / ".local/share/saga"
-PID_FILE = Path("/tmp/saga.pid")
-LOCK_FILE = Path("/tmp/saga.lock")
 LOG_FILE = PROJECT_DIR / "saga.log"
 
 EDGE_VOICE = "es-AR-ElenaNeural"  # Microsoft Edge TTS, voz argentina femenina
