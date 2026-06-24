@@ -72,5 +72,6 @@ llegando por SSE desde `orb_server`.
 
 ## Notas
 - Los plugins (deepgram/silero/noise-cancellation/turn-detector) se importan a NIVEL MÓDULO (se registran en el main thread; importarlos tarde crashea).
+- **Cap de threads ONNX (U9, `lk/onnx_tune.py`)**: `cap_onnx_threads()` se llama en `agent.py` antes de cargar los modelos. ONNX por default usa 1 thread/core + spinning → el wake quemaba ~367% CPU idle. Con intra/inter=1 + `allow_spinning=0` el worker bajó de ~410% a ~40% sin perder detección. NO sacarlo.
 - La key se carga de `.env.local` con `python-dotenv` al importar el módulo.
 - Sin `DEEPGRAM_API_KEY` → cae solo a whisper/edge (no es config, lo decide la presencia de la key).

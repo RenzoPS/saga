@@ -35,6 +35,11 @@ if _ROOT not in sys.path:
 
 from livekit import agents, rtc
 from livekit.agents import AgentServer, AgentSession, Agent, RoomInputOptions
+# Cap de threads ONNX ANTES de cargar silero/turn_detector/wake (todos ONNX): 1 thread + sin
+# spinning -> mata el ~367% CPU idle del wake (ver lk/onnx_tune.py). Debe correr antes de instanciar
+# cualquier InferenceSession.
+from lk.onnx_tune import cap_onnx_threads
+cap_onnx_threads()
 from livekit.plugins import silero, deepgram   # deepgram: import a nivel módulo (el plugin
 # se registra al importar y DEBE ser en el main thread; importarlo tarde crashea)
 from livekit.plugins.turn_detector.multilingual import MultilingualModel  # EOU semántico (anti-chopping)

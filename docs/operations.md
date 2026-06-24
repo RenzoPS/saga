@@ -113,6 +113,13 @@ Binarios requeridos: `claude` (crítico), `mpg123`/`pacat`/`paplay` (audio), `gr
   no las pestañas zombie. Si el socket de control falta, `saga-ctl restart` (server + worker frescos).
 - **Plugins de LiveKit se importan a nivel módulo** en `lk/agent.py` (deben registrarse en el main
   thread; importarlos tarde crashea).
+- **Cap de threads ONNX (U9) — NO sacarlo.** Los modelos de audio (wake "hey saga", silero VAD, turn
+  detector) corren en ONNX Runtime, que por default abre 1 thread por core y los hace *spin* (busy-wait)
+  entre inferencias → el wake quemaba ~367% CPU **en idle** (worker total ~410%). `lk/onnx_tune.py`
+  parchea `ort.InferenceSession` (intra/inter=1 + `allow_spinning=0`); se llama en `lk/agent.py` ANTES de
+  cargar cualquier modelo. Bajó el worker a ~40% sin perder detección. `OMP_NUM_THREADS` NO sirve
+  (onnxruntime 1.26 sin OpenMP) → la única vía es `SessionOptions`. La RAM del turn detector (~1.8 GB)
+  es deuda aparte (no la toca este fix).
 - **Orquestación room**: `saga-ctl` pre-arranca server fresco + Claude + orbe ANTES del worker (corre `entry()`
   recién al despacharse, cuando el browser entra al room). `prewarm_claude()`/`ensure_orb()` son dedup-safe →
   sin doble-spawn. El wait del socket de control va DESPUÉS de abrir el browser (el browser es el trigger del dispatch).
