@@ -2,11 +2,10 @@
 
 Recibe el buffer de audio de un turno (LiveKit ya hizo VAD + turn detection) y lo
 transcribe de una. Se envuelve con `stt.StreamAdapter(vad)` en agent.py para darle
-semántica de streaming. Reusa los params de decodificación de `vc.config.WHISPER_DECODE`
-(fuente única, los mismos del daemon/fallback del flujo actual).
+semántica de streaming. Reusa los params de decodificación de `vc.config.WHISPER_DECODE`.
 
-OJO: en este modo LiveKit es dueño del audio -> el whisper_daemon de vc/ NO corre acá;
-el modelo se carga caliente dentro de este proceso.
+Es el FALLBACK de STT cuando NO hay DEEPGRAM_API_KEY (con key, el STT es Deepgram Nova-3).
+El modelo se carga caliente dentro de este proceso (LiveKit es dueño del audio).
 """
 
 import asyncio

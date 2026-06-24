@@ -2,7 +2,7 @@
 """Server persistente del orbe de saga.
 
 Sirve orb.html (+ vendor local de three.js) en localhost y emite por SSE el
-estado actual (canal confiable, no se pierde). saga.py hace POST /state?s=<fase>.
+estado actual (canal confiable, no se pierde). El agente hace POST /state?s=<fase> (vc/orb.orb_state).
 (El nivel de audio se removió: el orbe anima stylized, no recibe audio.)
 Endpoints de entrada del panel del orbe (reenvian al socket o escriben /tmp, sin tocar el stack de voz):
   POST /attach?kind=image  -> imagen pegada -> dead-drop en /tmp (binaria, Claude la lee de disco).
@@ -10,12 +10,17 @@ Endpoints de entrada del panel del orbe (reenvian al socket o escriben /tmp, sin
                               control del agente, que lo guarda en MEMORIA (no toca el filesystem).
   POST /say                -> prompt directo (Shift+Enter) -> reenvia `say <b64>` al socket -> el
                               agente dispara un turno inmediato sin grabar voz.
-Solo stdlib + paths/constantes de vc.config (sin dependencias pip).
+  GET  /token              -> (modo room, Ciclo 4) emite el JWT con el que el cliente browser se
+                              une al room de livekit-server. Mintea con livekit.api (import lazy;
+                              el resto del módulo sigue stdlib-only).
+Stdlib + paths/constantes de vc.config. La única dep pip es livekit-api, y SOLO se importa
+dentro de /token (lazy) -> el resto del módulo es stdlib puro.
 
 Estados: idle, rec, transcribe, screen, think, speak, nueva, error, cancel, attach.
 """
 import os
 import sys
+import json
 import time
 import queue
 import base64
@@ -30,10 +35,17 @@ from urllib.parse import urlparse, parse_qs
 _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
-from vc.config import ATTACH_IMG_PATH, LK_CTL_SOCK
+from vc.config import (
+    ATTACH_IMG_PATH, LK_CTL_SOCK,
+    LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_ROOM,
+)
 
 PORT = int(os.environ.get("ORB_PORT", "8777"))
 TOKEN = os.environ.get("ORB_TOKEN", "")          # vacio = sin auth (local)
+# Wake (U4): el cliente lee este flag del /token para decidir si publica el mic DESMUTEADO siempre
+# (wake ON: el server necesita oír "hey saga") o gateado por estado (wake OFF, default). OJO:
+# bool("0") es True -> comparar el valor real, no bool() sobre el env crudo.
+WAKE_ENABLED = os.environ.get("SAGA_WAKE_ENABLED", "0").strip().lower() in ("1", "true", "yes", "on")
 IDLE_TIMEOUT = 180.0                              # seg sin actividad -> vuelve a idle
 HERE = Path(__file__).resolve().parent
 HTML = HERE / "orb.html"
@@ -43,7 +55,7 @@ VALID_STATES = {
     "idle", "rec", "transcribe", "screen",
     "think", "speak", "nueva", "error", "cancel", "attach",
 }
-MIME = {".js": "text/javascript", ".css": "text/css",
+MIME = {".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css",
         ".html": "text/html; charset=utf-8", ".json": "application/json"}
 
 _state = {"name": "idle"}
@@ -121,9 +133,41 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/healthz":
             self._send_bytes(b"ok", "text/plain")
             return
+        if path == "/token":
+            return self._serve_token()
         if path == "/events":
             return self._serve_events()
         self.send_error(404)
+
+    def _serve_token(self):
+        """Emite el JWT del cliente para unirse al room. GET /token?identity=&room=.
+        Mintea con livekit.api (import lazy: solo /token la necesita).
+        Respuesta: {"url": "ws://127.0.0.1:7880", "token": "<jwt>", "room": "saga", "wake": <bool>}.
+        `wake` (U4): si true, el cliente publica el mic DESMUTEADO siempre (el server oye "hey saga")."""
+        if not LIVEKIT_API_KEY or not LIVEKIT_API_SECRET:
+            self.send_error(500, "LIVEKIT_API_KEY/SECRET sin configurar (.env.local)")
+            return
+        qs = parse_qs(urlparse(self.path).query)
+        identity = (qs.get("identity") or ["saga-client"])[0]
+        room = (qs.get("room") or [LIVEKIT_ROOM])[0]
+        try:
+            from livekit import api  # lazy: única dep pip del módulo
+            token = (
+                api.AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
+                .with_identity(identity)
+                .with_grants(api.VideoGrants(room_join=True, room=room))
+                # El token es SOLO para unirse al room. El dispatch del agente es ÚNICO y PROACTIVO:
+                # lo hace saga-ctl (_ensure_agent_dispatched, por API) al arrancar, ANTES del browser.
+                # (Antes el token traía además RoomConfiguration -> doble vía de dispatch; se sacó.)
+                .to_jwt()
+            )
+        except Exception as e:  # noqa: BLE001 - degradar a 500 con causa
+            self.send_error(500, f"no se pudo emitir el token: {e}")
+            return
+        body = json.dumps(
+            {"url": LIVEKIT_URL, "token": token, "room": room, "wake": WAKE_ENABLED}
+        ).encode()
+        self._send_bytes(body, "application/json")
 
     def _serve_vendor(self, path: str):
         target = (HERE / path.lstrip("/")).resolve()

@@ -11,6 +11,7 @@ dist/
 # estado runtime / logs
 saga.log*
 livekit_agent.log*
+livekit_server.log*
 session.json
 .guard-settings.json
 *.wav

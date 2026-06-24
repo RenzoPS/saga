@@ -1,0 +1,27 @@
+name: tests
+
+# Corre al entrar cambios a main (push directo o merge de PR) y en PRs que apuntan a main.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # py_compile de TODO el repo: atrapa errores de sintaxis sin instalar deps.
+      - name: py_compile (sintaxis)
+        run: python -m py_compile $(git ls-files '*.py')
+
+      # Suite de funciones puras (TTS-keywords, guard denylist, attach). Stdlib-only:
+      # NO necesita instalar dependencias (la cadena de imports degrada dotenv y no toca livekit).
+      - name: unittest — funciones puras
+        run: python -m unittest tests.test_pure -v

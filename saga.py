@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""voz -> Claude Code -> voz. Toggle por hotkey. Cancelable.
+"""saga: entry point fino del hotkey. Win+Z (Hyprland) -> vc.app:main -> manda 'press'
+al agente LiveKit por el socket de control. `saga --doctor` corre el health check.
 
-Entry point fino: la lógica vive en el paquete vc/ (config, runtime, orb,
-desktop, audio, stt, session, claudecli, tts, app). El wrapper de Hyprland
-sigue llamando a este archivo igual que antes."""
+La voz (STT/LLM/TTS/turnos) vive en el agente (lk/agent.py); el paquete vc/ tiene los
+helpers reusados (config, runtime, session, claudecli, orb, desktop, doctor, app)."""
 
 import sys
 

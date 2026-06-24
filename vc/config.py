@@ -7,10 +7,6 @@ from pathlib import Path
 
 HOME = Path.home()
 PROJECT_DIR = HOME / ".local/share/saga"
-PID_FILE = Path("/tmp/saga.pid")
-LOCK_FILE = Path("/tmp/saga.lock")
-ABORT_FILE = Path("/tmp/saga.abort")  # pid del último owner abortado (detección de zombie)
-AUDIO_FILE = Path("/tmp/saga.wav")
 LOG_FILE = PROJECT_DIR / "saga.log"
 
 EDGE_VOICE = "es-AR-ElenaNeural"  # Microsoft Edge TTS, voz argentina femenina
@@ -19,14 +15,8 @@ EDGE_PITCH = "+0Hz"
 
 WHISPER_SIZE = os.environ.get("VOICE_WHISPER_SIZE", "small")  # small: preciso (para voz, entender bien > 2s). base = más rápido/menos preciso
 WHISPER_BEAM = int(os.environ.get("VOICE_WHISPER_BEAM", "5"))  # beam5: búsqueda más amplia/robusta con small (preferencia del usuario). beam1 dispara loops
-# Daemon STT: mantiene el modelo caliente en RAM entre invocaciones (mata los ~3s
-# de recarga por Win+Z). transcribe() es cliente; si el daemon esta caido cae a inline.
-WHISPER_SOCK = Path("/tmp/saga-whisper.sock")
-WHISPER_DAEMON = PROJECT_DIR / "whisper_daemon.py"
-WHISPER_IDLE_S = 1800  # daemon se autoapaga tras 30 min sin uso
-# Params de decodificación de Whisper, UNA sola fuente (los usan el daemon y el
-# fallback inline -> antes estaban duplicados y se desincronizaban). beam_size y
-# language van aparte. temperature como lista = fallback; no_repeat_ngram mata loops.
+# Params de decodificación de Whisper (faster-whisper en el agente cuando NO hay key Deepgram).
+# temperature como lista = fallback; no_repeat_ngram mata loops.
 WHISPER_DECODE = dict(
     vad_filter=True,
     condition_on_previous_text=False,
@@ -135,7 +125,10 @@ CLAUDE_SYSTEM_PROMPT = (
     "- Texto plano. Nada de markdown: sin asteriscos, sin backticks, sin listas con guiones o numeros, sin headers.\n"
     "- Espanol rioplatense: vos, dale, che, fijate.\n"
     "- Largo proporcional: pregunta corta = respuesta corta. Tono conversacional, directo, sin floreos.\n"
-    "- Si no podes responder por falta de datos o tools, una sola frase corta. No listes alternativas ni te disculpes.\n"
+    "- Sos agentica: tenes tools (bash, leer/escribir archivos, etc.). Si te piden una ACCION que podes hacer "
+    "en esta maquina (abrir una app, reproducir/pausar musica con playerctl o el comando que sea, decir la hora "
+    "con date, mirar algo del sistema), HACELA con la tool y despues confirma corto lo que hiciste. No digas "
+    "'no puedo' si tenes como hacerlo. Solo si REALMENTE no hay forma, una sola frase corta sin disculpas ni listas.\n"
     "\n"
     "Estilo:\n"
     "Hablas como si le contaras algo a un amigo en un cafe. Nada de 'primero, segundo, tercero', "
@@ -144,33 +137,48 @@ CLAUDE_SYSTEM_PROMPT = (
     "Si explicas algo tecnico, lo contas como historia, no como manual."
 )
 
-SAMPLE_RATE = 16000
-CHANNELS = 1
-MIN_DURATION_S = 0.4
+SAMPLE_RATE = 16000   # lo usa el wake_daemon (Vosk, dormido)
 CLAUDE_TIMEOUT_S = 180
 
-# Auto-stop por silencio (VAD Silero) también en el flujo Win+Z, no solo en modo wake.
-# Default ON: apretás Win+Z, hablás, y corta solo al callar (no hace falta 2do Win+Z
-# para cortar). El 2do Win+Z para cortar a mano sigue andando igual. VOICE_AUTOSTOP=0
-# vuelve al modo clásico "Win+Z arranca / Win+Z corta".
-AUTOSTOP_ON_MANUAL = os.environ.get("VOICE_AUTOSTOP", "1") != "0"
-
-# Modo LiveKit. Cuando está ON, el runtime de audio (captura, streaming, chunks, VAD,
-# turn detection, barge-in) lo maneja livekit-agents (lk/agent.py console) EN VEZ de
-# nuestro whisper_daemon + flujo Win+Z. Claude sigue siendo el cerebro y el orbe +
-# edge-tts se reusan. Default ON -> `saga-ctl start` levanta el agente LiveKit. Para
-# volver al modo clásico (Win+Z por-turno): VOICE_LIVEKIT=0. Ver lk/README.md.
-LIVEKIT_ENABLED = os.environ.get("VOICE_LIVEKIT", "1") != "0"
 LK_AGENT = PROJECT_DIR / "lk" / "agent.py"
 LK_LOG = PROJECT_DIR / "livekit_agent.log"
-# Socket de control: Win+Z (vc/app.py) le manda "toggle"/"on"/"off" al agente para
-# prender/apagar el mic (push-to-talk). Lo crea y escucha el proceso del agente.
+# Socket de control: Win+Z (vc/app.py) le manda "press" al agente para prender/apagar el mic
+# (push-to-talk). Lo crea y escucha el proceso del agente.
 LK_CTL_SOCK = Path("/tmp/saga-lk-ctl.sock")
 
 # Secretos del proyecto (API keys). Archivo gitignored, cargado por el agente con
 # python-dotenv. NO es config seteable: el STT/TTS los decide el código (Deepgram por
 # default; si no hay key, cae solo a whisper/edge). Acá solo vive el secreto.
 ENV_FILE = PROJECT_DIR / ".env.local"
+
+# Cargamos .env.local acá (no solo en el agente) para que CUALQUIER importador de config
+# —incluido orb_server, que mintea el JWT en /token— vea LIVEKIT_API_KEY/SECRET y demás.
+# load_dotenv es idempotente y no pisa env ya seteadas; si falta dotenv, se degrada en silencio.
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv(ENV_FILE)
+except Exception:
+    pass
+
+# Transporte room (Ciclo 4). El worker (lk/agent.py) y el token endpoint (orb_server) leen
+# de acá. URL/room tienen default local; las keys viven SOLO en .env.local (secreto). El
+# server bindea a loopback (livekit.yaml) -> nada sale de la máquina.
+LIVEKIT_URL = os.environ.get("LIVEKIT_URL", "ws://127.0.0.1:7880")
+LIVEKIT_API_KEY = os.environ.get("LIVEKIT_API_KEY", "")
+LIVEKIT_API_SECRET = os.environ.get("LIVEKIT_API_SECRET", "")
+LIVEKIT_ROOM = os.environ.get("LIVEKIT_ROOM", "saga")
+# Nombre del agente para DISPATCH EXPLÍCITO (Ciclo 4): el worker se registra con este nombre y
+# saga-ctl lo despacha PROACTIVAMENTE por API (_ensure_agent_dispatched) al arrancar, ANTES del
+# browser. Así no depende de qué cliente crea el room ni del timing (lo que rompía el auto-dispatch:
+# una pestaña vieja creaba el room y no había agente). Fuente de dispatch ÚNICA (el token no despacha).
+LIVEKIT_AGENT_NAME = os.environ.get("LIVEKIT_AGENT_NAME", "saga")
+
+# Server room (Ciclo 4, U6): binario NATIVO + su config. saga-ctl lo levanta/baja en modo room.
+# (Se usa el binario, NO Docker: el NAT de Docker rompía el WebRTC local — ver aidlc-docs.)
+LIVEKIT_SERVER_BIN = HOME / ".local/bin/livekit-server"
+LIVEKIT_CONFIG = PROJECT_DIR / "livekit.yaml"
+LK_SERVER_LOG = PROJECT_DIR / "livekit_server.log"
+LIVEKIT_SIGNAL_PORT = 7880   # signaling (loopback) — readiness del server
 
 MONITOR_CLASS = "saga-monitor"
 MONITOR_WORKSPACE = 10
@@ -190,18 +198,12 @@ ORB_PORT = int(os.environ.get("ORB_PORT", "8777"))
 ORB_URL = f"http://127.0.0.1:{ORB_PORT}/"
 ORB_SERVER = ORB_DIR / "orb_server.py"
 
-# Diccionario de palabras-problema (JSON editable). Se aplica en clean_for_tts.
-WORD_ALIASES_PATH = PROJECT_DIR / "word_aliases.json"
-
 SESSION_FILE = PROJECT_DIR / "session.json"
 
-# Wake word ON/OFF. Default OFF: el trigger es Win+Z (sin escucha continua -> 0
-# falsos positivos, 0 contención de mic, un daemon menos). El wake_daemon y TODO su
-# código quedan intactos; VOICE_WAKE_ENABLED=1 reactiva la escucha de "claude".
-# Lo lee vcctl al levantar para decidir si lanza el wake_daemon.
-WAKE_ENABLED = os.environ.get("VOICE_WAKE_ENABLED", "0") == "1"
+# Wake word del agente LiveKit: ON/OFF con SAGA_WAKE_ENABLED (lo leen lk/agent.py + orb_server).
+# Default OFF: el trigger es Win+Z. Modelo "hey saga" (U4) sobre el track del browser.
 
-# Wake word: daemon Vosk que escucha el mic en continuo y dispara el flujo al oir
+# Wake word clásico (Vosk, DORMIDO/fuera de scope): daemon que escuchaba el mic y disparaba el
 # "saga" (o variantes que el STT chico confunde). Local, sin cuenta, sin training.
 # Ventaja sobre "claude": "saga" SI esta en el lexico ES -> Vosk la reconoce nativo.
 WAKE_MODEL_DIR = PROJECT_DIR / "models" / "vosk-model-small-es-0.42"
@@ -223,15 +225,6 @@ WAKE_TRIGGER_PHRASES = ("saga", "hey saga")
 # Arranca permisivo; tunear con las líneas 'final candidato' del log.
 WAKE_MIN_CONF = 0.7
 WAKE_COOLDOWN_S = 2.0  # tras un disparo, ignorar nuevos hasta que pase esto (anti doble-beep)
-# Modo conversación: tras el wake, sigue grabando turnos sin re-decir "claude" hasta
-# que digas una despedida. Match: el texto del turno es CORTO y contiene una frase.
-GOODBYE_KEYWORDS = (
-    "gracias", "muchas gracias", "muchisimas gracias", "muchísimas gracias",
-    "listo", "terminamos", "estamos", "todo ready", "todo listo", "ya esta",
-    "ya está", "eso es todo", "eso seria todo", "eso sería todo", "nada mas",
-    "nada más", "chau", "chao", "perfecto gracias", "dale gracias",
-)
-WAKE_MAX_IDLE_TURNS = 3  # silencios/vacíos seguidos -> cortar la conversación sola
 
 # Regex que matchea CUALQUIER mencion visual como palabra suelta.
 # Usa word boundaries para evitar falsos positivos (ej "admira" no matchea "mira").

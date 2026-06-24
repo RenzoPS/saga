@@ -7,7 +7,7 @@ import importlib
 import urllib.request
 
 from .config import (
-    WHISPER_SOCK, CLAUDE_SOCK, ORB_URL, CLAUDE_MEM_DIR, CLAUDE_MODEL,
+    CLAUDE_SOCK, ORB_URL, CLAUDE_MEM_DIR, CLAUDE_MODEL,
     WHISPER_SIZE, WHISPER_BEAM, CLAUDE_SKIP_PERMISSIONS, SESSION_FILE,
 )
 
@@ -65,7 +65,6 @@ def doctor() -> int:
 
     # --- daemons (no estar corriendo NO es error: arrancan en el Win+Z) ---
     print("\nDaemons (○ = apagado, arranca solo en Win+Z):")
-    line(OK if _sock_up(WHISPER_SOCK) else INFO, "whisper daemon", str(WHISPER_SOCK))
     line(OK if _sock_up(CLAUDE_SOCK) else INFO, "claude daemon", str(CLAUDE_SOCK))
     line(OK if _http_up(ORB_URL + "healthz") else INFO, "orb server", ORB_URL)
 
