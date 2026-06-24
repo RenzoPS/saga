@@ -40,8 +40,9 @@ son densos y confiables** — leelos en el archivo.
   `os.environ.pop("LIVEKIT_AGENT_NAME", None)` antes de crear el server (si esa env existiera, el SDK forzaría
   explicit dispatch). `session.start(..., room_input_options=RoomInputOptions(close_on_disconnect=False))` →
   recargar/cerrar la pestaña del orbe NO mata la sesión ni el socket de Win+Z. Arma el `AgentSession`
-  (STT+VAD+LLM+TTS) con TODA la config de turnos dentro de `turn_handling`: turn detector SEMÁNTICO
-  (`MultilingualModel`, EOU multilingüe), `endpointing` min 2s, `interruption` por VAD local, y
+  (STT+VAD+LLM+TTS) con TODA la config de turnos dentro de `turn_handling`: fin de turno por VAD puro
+  (`turn_detection="vad"`, silero; antes era el turn detector semántico `MultilingualModel`, reemplazado en
+  U10 por VAD puro → liberó ~1.8 GB de RAM), `endpointing` min 3s, `interruption` por VAD local, y
   `preemptive_generation` **OFF** (sobre transcripts parciales rompía el LLM bloqueante). Implementa
   las 3 fases de Win+Z (`_press`), el prompt por texto (`_say`), el socket de control
   (`press`/`stage`/`say`), y los handlers de estado `_on_agent_state`/`_on_user_state`. **Timers
