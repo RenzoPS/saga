@@ -118,8 +118,9 @@ Binarios requeridos: `claude` (crítico), `mpg123`/`pacat`/`paplay` (audio), `gr
   entre inferencias → el wake quemaba ~367% CPU **en idle** (worker total ~410%). `lk/onnx_tune.py`
   parchea `ort.InferenceSession` (intra/inter=1 + `allow_spinning=0`); se llama en `lk/agent.py` ANTES de
   cargar cualquier modelo. Bajó el worker a ~40% sin perder detección. `OMP_NUM_THREADS` NO sirve
-  (onnxruntime 1.26 sin OpenMP) → la única vía es `SessionOptions`. La RAM del turn detector (~1.8 GB)
-  es deuda aparte (no la toca este fix).
+  (onnxruntime 1.26 sin OpenMP) → la única vía es `SessionOptions`. La RAM del turn detector semántico
+  (~1.8 GB) era deuda aparte (no la tocó este fix); se RESOLVIÓ en U10: el turn detector `MultilingualModel`
+  se reemplazó por VAD puro (`turn_detection="vad"`, silero) → liberó esos ~1.8 GB (worker de ~2.6 a ~0.9 GB).
 - **Orquestación room**: `saga-ctl` pre-arranca server fresco + Claude + orbe ANTES del worker (corre `entry()`
   recién al despacharse, cuando el browser entra al room). `prewarm_claude()`/`ensure_orb()` son dedup-safe →
   sin doble-spawn. El wait del socket de control va DESPUÉS de abrir el browser (el browser es el trigger del dispatch).

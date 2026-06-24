@@ -16,15 +16,15 @@ nativo local; el audio entra/sale por el track del browser (cliente orbe). Ver e
 - STT: `deepgram.STT("nova-3", language="es")` — streaming.
 - TTS: `deepgram.TTS("aura-2-gloria-es")` — voz española neutra (constante `_DEEPGRAM_VOICE`).
 - VAD: `silero.VAD.load(activation_threshold=0.7)` — sube el piso para que el mic de laptop ignore ruido de fondo.
-- Fin de turno: turn detector **SEMÁNTICO** `MultilingualModel` (livekit-plugins-turn-detector), no solo silencio. Cierra el turno por el SENTIDO de la frase → anti-chopping en frases con pausas.
+- Fin de turno: **VAD puro** (silero, `activation_threshold 0.7`, `turn_detection="vad"`). El turno cierra por SILENCIO. (Antes era un turn detector semántico `MultilingualModel` que cerraba por el SENTIDO de la frase; U10 lo reemplazó por VAD puro → liberó ~1.8 GB de RAM y sacó el error "Error predicting end of turn".)
 - Ruido: en room se apoya en el VAD Silero (activation_threshold 0.7). BVC (`noise_cancellation`) NO se usa: requiere LiveKit Cloud y falla al aplicarse contra el server self-hosted.
 
 ### Config de turnos (`turn_handling`)
 TODA la config de turnos va DENTRO del dict `turn_handling` de `AgentSession`. Los params
 top-level (`preemptive_generation`, `min_endpointing_delay`, …) están **deprecados y se
 ignoran** cuando se pasa `turn_handling`.
-- `turn_detection`: `MultilingualModel()` (EOU semántico multilingüe, soporta español).
-- `endpointing`: `{"min_delay": 2.0, "max_delay": 6.0}` — piso de ~2s de silencio antes de cerrar (deja seguir hablando entre sub-frases).
+- `turn_detection`: `"vad"` — fin de turno por el VAD silero (cierre por silencio). (Antes `MultilingualModel()`, EOU semántico; U10 lo pasó a VAD puro → −1.8 GB de RAM.)
+- `endpointing`: `{"min_delay": 3.0, "max_delay": 6.0}` — piso de ~3s de silencio antes de cerrar (deja seguir hablando entre sub-frases).
 - `interruption`: `{"mode": "vad"}` — barge-in por VAD local (silero), NO `adaptive` (el default necesita LiveKit Cloud).
 - `preemptive_generation`: `{"enabled": False}` — apagado a propósito. El default (`enabled: True`) arranca el LLM sobre transcripts parciales y los cancela/reintenta; con el LLM custom (bridge bloqueante al `claude_daemon`) eso causa multi-commit → turnos partidos sin respuesta. **DENTRO** de `turn_handling` (el top-level no tenía efecto).
 
@@ -52,8 +52,8 @@ pestaña del orbe NO mata la sesión ni el socket de Win+Z.
 
 ## Win+Z (3 fases, vía socket de control LK_CTL_SOCK)
 Máquina de 3 fases (`idle`/`rec`/`busy`): idle→graba · rec→corta y manda (`commit_user_turn`) ·
-busy→mata la respuesta en curso (`interrupt(force=True)` + cancela el LLM). Silencio (turn
-detector + ~2s) también cierra y manda. Win+Z (otro proceso) manda `press` al socket Unix;
+busy→mata la respuesta en curso (`interrupt(force=True)` + cancela el LLM). Silencio (VAD silero
++ ~3s) también cierra y manda. Win+Z (otro proceso) manda `press` al socket Unix;
 el server del socket corre en el MISMO loop que la sesión → llama la API de LiveKit directo.
 
 ### Timers PROPIOS (no internals privados)

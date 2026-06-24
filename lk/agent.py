@@ -42,7 +42,6 @@ from lk.onnx_tune import cap_onnx_threads
 cap_onnx_threads()
 from livekit.plugins import silero, deepgram   # deepgram: import a nivel módulo (el plugin
 # se registra al importar y DEBE ser en el main thread; importarlo tarde crashea)
-from livekit.plugins.turn_detector.multilingual import MultilingualModel  # EOU semántico (anti-chopping)
 from dotenv import load_dotenv
 
 from lk.claude_llm import ClaudeCodeLLM
@@ -145,12 +144,14 @@ async def entry(ctx: "agents.JobContext") -> None:
         # TODA la config de turnos va ACÁ (los params top-level tipo preemptive_generation/
         # min_endpointing_delay están DEPRECADOS y se ignoran cuando se pasa turn_handling).
         turn_handling={
-            # Turn detector SEMÁNTICO (modelo EOU multilingüe, soporta español): decide si TERMINASTE
-            # de hablar por el SENTIDO de la frase, no solo por el silencio. Anti-chopping.
-            "turn_detection": MultilingualModel(),
-            # min_delay = piso de silencio antes de cerrar el turno (aún con el modelo). 2s da margen
-            # para seguir hablando entre sub-frases -> el modelo + 2s evitan partir el turno.
-            "endpointing": {"min_delay": 2.0, "max_delay": 6.0},
+            # Turn detection por VAD PURO (silero): cierra el turno por SILENCIO, no por sentido (U10).
+            # Antes era el MultilingualModel (EOU semántico) -> ocupaba ~1.8 GB de RAM. En la práctica el
+            # cierre ya se daba por silencio (el VAD ganaba), así que se sacó el transformer: -1.8 GB sin
+            # cambio de UX perceptible. silero ya está cargado (vad=, interruption vad) -> costo cero.
+            "turn_detection": "vad",
+            # min_delay = silencio sin voz (silero) antes de cerrar el turno. 3s da margen amplio para
+            # pausar entre sub-frases sin que te corte. max_delay = techo duro.
+            "endpointing": {"min_delay": 3.0, "max_delay": 6.0},
             # Interrupción por VAD local (silero), NO "adaptive" (default, que necesita LIVEKIT_API_KEY
             # de la nube -> sin key fallaba al apretar Win+Z mientras hablaba). vad = local, sin key.
             "interruption": {"mode": "vad"},

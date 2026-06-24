@@ -11,8 +11,9 @@ saga es **push-to-talk** con Win+Z, una máquina de 3 fases.
 | **rec** | grabando tu voz | corta y manda el turno ya (→ busy) |
 | **busy** | transcribiendo / pensando / hablando | mata la respuesta en curso (→ idle) |
 
-Además, en **rec** el turno también se cierra solo: lo decide el **turn detector
-semántico** (no solo el silencio), sin segundo Win+Z. Ver abajo.
+Además, en **rec** el turno también se cierra solo **por silencio** (VAD silero,
+~3s), sin segundo Win+Z. Ver abajo. (Antes era un turn detector SEMÁNTICO
+`MultilingualModel`; U10 lo reemplazó por VAD puro y liberó ~1.8 GB de RAM.)
 
 ## Modo room (único, Ciclo 4)
 
@@ -27,7 +28,7 @@ sequenceDiagram
     participant K as Win+Z (vc/app.py)
     participant B as Browser (mic + orbe)
     participant A as lk/agent.py (worker)
-    participant TD as Turn detector (MultilingualModel)
+    participant TD as Fin de turno (VAD silero)
     participant DG as Deepgram STT
     participant L as lk/claude_llm
     participant CD as claude_daemon
@@ -40,7 +41,7 @@ sequenceDiagram
     O->>B: SSE rec -> desmutea mic
     U->>B: habla
     B->>A: track de audio
-    Note over A,TD: fin de turno por SENTIDO (EOU semántico)<br/>+ min_delay 2.0s, o 2do Win+Z
+    Note over A,TD: fin de turno por SILENCIO (VAD silero)<br/>min_delay 3.0s, o 2do Win+Z
     A->>O: state=think  (arma watchdog _busy 18s)
     A->>DG: audio -> texto
     DG-->>A: transcript
@@ -58,17 +59,21 @@ Detalle clave: el orbe pasa a `speak` **recién cuando el agente entra en `speak
 (primer audio real), no en el primer token de Claude (así queda en `think` mientras
 Claude piensa o usa tools). El orbe **late con la voz real** que reproduce el browser.
 
-### Fin de turno: turn detector semántico (no solo silencio)
+### Fin de turno: VAD puro (cierre por silencio)
 
-El cierre automático del turno NO es VAD puro. La config vive en `turn_handling`
-(`lk/agent.py`); los params top-level (`min_endpointing_delay`, `preemptive_generation`)
-están **deprecados** y se ignoran cuando se pasa `turn_handling`:
+El cierre automático del turno es **VAD puro** (silero): el turno cierra por SILENCIO.
+La config vive en `turn_handling` (`lk/agent.py`); los params top-level
+(`min_endpointing_delay`, `preemptive_generation`) están **deprecados** y se ignoran
+cuando se pasa `turn_handling`:
 
-- **`turn_detection: MultilingualModel()`** — modelo EOU multilingüe (soporta español).
-  Decide si **terminaste de hablar por el SENTIDO de la frase**, no solo por el silencio.
-  Anti-chopping: frases con pausas ya no se parten en varios turnos.
-- **`endpointing: {min_delay: 2.0, max_delay: 6.0}`** — piso de silencio antes de cerrar.
-  El `min_delay=2.0` da margen para seguir hablando entre sub-frases (modelo + 2s).
+- **`turn_detection: "vad"`** — fin de turno por el VAD silero (`activation_threshold 0.7`,
+  el mismo que ya estaba cargado). El turno cierra cuando dejás de hablar el tiempo de
+  silencio configurado. (Antes era un modelo EOU SEMÁNTICO `MultilingualModel` que decidía
+  el fin por el SENTIDO de la frase; U10 lo reemplazó por VAD puro → liberó ~1.8 GB de RAM
+  y eliminó el error "Error predicting end of turn". La UX del turno se mantuvo: en la
+  práctica el cierre ya se daba por silencio.)
+- **`endpointing: {min_delay: 3.0, max_delay: 6.0}`** — piso de silencio antes de cerrar.
+  El `min_delay=3.0` da margen para seguir hablando entre sub-frases (3s de silencio).
 - **`interruption: {mode: "vad"}`** — interrupción/barge-in por VAD local (silero), NO
   "adaptive" (que requiere LiveKit Cloud key).
 - **`preemptive_generation: {enabled: False}`** — **OFF a propósito**. Si está ON, el LLM
@@ -109,12 +114,13 @@ están **deprecados** y se ignoran cuando se pasa `turn_handling`:
 |---------|---------|--------|
 | LLM ttft | **2.2s** | el cerebro (`claude_daemon`) arranca a responder |
 | TTS ttfb | **0.3s** | arranque de la voz |
-| EOU delay | **2.0s** | espera tras dejar de hablar (= `min_delay` anti-chopping) |
+| EOU delay | **2.0s** | espera tras dejar de hablar (= `min_delay`; benchmark Ciclo 4 con min 2.0; U10 lo subió a 3.0) |
 | transcription_delay | 0.5s | STT (Deepgram) |
 
-**Latencia percibida típica** (dejás de hablar → voz de saga) ≈ **4.5s** =
-EOU 2.0 + ttft 2.2 + ttfb 0.3. El `min_delay=2.0` es una **decisión** (anti-chopping),
-no una regresión; bajarlo acelera pero reintroduce chopping. Detalle en
+**Latencia percibida típica** (dejás de hablar → voz de saga): con el `min_delay=3.0` de U10
+≈ **5.5s** = EOU 3.0 + ttft 2.2 + ttfb 0.3 (el benchmark Ciclo 4 era ≈4.5s con min 2.0). El
+`min_delay` es una **decisión** (deja seguir hablando entre sub-frases sin partir el turno);
+bajarlo acelera pero reintroduce chopping. Detalle en
 `aidlc-docs/construction/build-and-test/ciclo4-build-and-test.md`.
 
 ## Wake word

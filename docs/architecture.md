@@ -25,7 +25,7 @@ graph TD
     end
 
     subgraph Worker["saga-worker (lk/agent.py start)"]
-        Agent["AgentSession (dueño del audio)<br/>STT/TTS Deepgram · Silero VAD · turn detector"]
+        Agent["AgentSession (dueño del audio)<br/>STT/TTS Deepgram · Silero VAD (fin de turno)"]
         LLM["lk/claude_llm.py (LLM custom = turn handler)"]
     end
 
@@ -53,8 +53,8 @@ graph TD
 ```
 
 **Flujo de un turno**: Win+Z → `press` por el socket de control → el cliente desmutea el mic (estado `rec`
-vía SSE) → el server enruta el track al worker → STT (Deepgram) transcribe → VAD + turn detector semántico
-cierran el turno → LLM (Claude vía daemon) → TTS (Deepgram) genera la voz → el worker **publica el track TTS**
+vía SSE) → el server enruta el track al worker → STT (Deepgram) transcribe → el VAD (silero) cierra el turno
+por silencio → LLM (Claude vía daemon) → TTS (Deepgram) genera la voz → el worker **publica el track TTS**
 al room → el browser lo reproduce y **anima el orbe con el nivel real de la voz** (Web Audio AnalyserNode).
 
 ## Modo único: room (LiveKit + transporte WebRTC)
@@ -66,7 +66,7 @@ worker (ver topología arriba). El Ciclo 4 (U7) eliminó el transporte console y
 |---|---|
 | Dueño del audio | `lk/agent.py start` (LiveKit-agents, conectado al server) |
 | Transporte | WebRTC (server ↔ browser ↔ worker) |
-| Captura/VAD/turn/barge-in | LiveKit (Silero VAD + turn detector semántico) |
+| Captura/VAD/turn/barge-in | LiveKit (Silero VAD: fin de turno por silencio + barge-in) |
 | STT | Deepgram Nova-3 (o faster-whisper local, `lk/whisper_stt.py`, sin key) |
 | TTS | Deepgram Aura-2 (o edge-tts local, `lk/edge_tts_plugin.py`, sin key) |
 | Sync del orbe | sí (track TTS real → Web Audio AnalyserNode) |
@@ -85,7 +85,8 @@ local (faster-whisper + edge-tts) corre DENTRO del agente, sin daemons separados
   Server `AgentServer(load_fnc=lambda: 0.0, drain_timeout=0, num_idle_processes=1)` con **dispatch AUTOMÁTICO**
   (`@server.rtc_session()` SIN `agent_name`): cuando el browser se une al room "saga", el server despacha el
   worker solo → `entry()` → socket de control. Default: STT `deepgram.STT(nova-3, es)` + TTS
-  `deepgram.TTS(aura-2-gloria-es)` + Silero VAD + turn detector semántico (`MultilingualModel`, anti-chopping).
+  `deepgram.TTS(aura-2-gloria-es)` + Silero VAD para el fin de turno por silencio (`turn_detection="vad"`;
+  antes era un turn detector semántico `MultilingualModel`, reemplazado en U10 por VAD puro → liberó ~1.8 GB de RAM).
   LLM custom `lk/claude_llm.py` reenvía al `claude_daemon`. Socket de control `LK_CTL_SOCK` (`press`=Win+Z,
   `say`=texto, `stage`=panel→memoria).
 - **Cliente** (`orb/orb.html`) — browser con LiveKit JS SDK (vendoreado en `orb/vendor/livekit/`). Pide token a
