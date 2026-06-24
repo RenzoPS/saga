@@ -123,3 +123,7 @@ Binarios requeridos: `claude` (crítico), `mpg123`/`pacat`/`paplay` (audio), `gr
 .venv/bin/python -m py_compile lk/*.py vc/*.py vcctl.py
 .venv/bin/python -m unittest tests.test_pure
 ```
+
+**CI** (`.github/workflows/tests.yml`): corre `py_compile` de todo el repo + `tests.test_pure` en cada
+push/PR a `main`. La suite es stdlib-only (no instala deps). El flujo de voz/Win+Z NO es CI-testeable
+(mic/WebRTC/subprocess) → se valida en vivo.
