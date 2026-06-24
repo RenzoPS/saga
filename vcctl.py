@@ -30,7 +30,6 @@ DAEMONS = ("wake_daemon.py", "claude_daemon.py", "orb_server.py")
 
 # Sockets + temporales a borrar en stop (sin tocar el beep, que se regenera).
 TMP_FILES = (
-    "/tmp/saga-whisper.sock",
     "/tmp/saga-claude.sock",
     "/tmp/saga.pid",
     "/tmp/saga.lock",
@@ -186,6 +185,11 @@ def _node_ip() -> str:
         s.connect(("1.1.1.1", 80))
         return s.getsockname()[0]
     except OSError:
+        # Sin ruta de salida (sin red) -> no hay IP LAN. LiveKit NO bindea media a loopback,
+        # así que con node_ip=127.0.0.1 el WebRTC va a fallar con dtls timeout aunque el
+        # signaling levante (HOT falso). Avisamos explícito en vez de morir en silencio.
+        print("start: ⚠ sin IP LAN (sin ruta de salida) -> node_ip=127.0.0.1; "
+              "el audio WebRTC NO va a conectar. Conectá la red y reintentá.")
         return "127.0.0.1"
     finally:
         s.close()
@@ -262,6 +266,35 @@ def _ensure_agent_dispatched() -> bool:
     return False
 
 
+def _dispatch_subsystem_ready() -> bool:
+    """True si el subsistema AgentDispatch del server YA RESPONDE (un list_dispatch liviano sin 503).
+    CLAVE del bug 'primera vez en frío falla, segunda anda': el server abre el puerto de signaling
+    (lo damos 'HOT') ANTES de tener listo el agent-dispatch. Si el WORKER registra en esa ventana, el
+    server queda sin poder asignarle jobs ('no response from servers') por toda la vida de ese server
+    -> Win+Z falla hasta reiniciar. Esperando esto ANTES de lanzar el worker, registra contra un
+    server ya listo y no se envenena."""
+    import asyncio
+    from vc.config import LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_ROOM
+    from livekit import api
+    http_url = LIVEKIT_URL.replace("wss://", "https://").replace("ws://", "http://")
+
+    async def _probe() -> None:
+        lk = api.LiveKitAPI(http_url, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
+        try:
+            # timeout DURO: contra un server a medio levantar el list_dispatch puede COLGAR (no dar
+            # 503): sin esto saga-ctl se freezea. Con timeout, cada intento corta y _wait_ready reintenta.
+            await asyncio.wait_for(
+                lk.agent_dispatch.list_dispatch(room_name=LIVEKIT_ROOM), timeout=2.0)
+        finally:
+            await lk.aclose()
+
+    try:
+        asyncio.run(_probe())
+        return True
+    except Exception:  # noqa: BLE001 - 503/timeout/unavailable mientras el subsistema arranca
+        return False
+
+
 def _has_deepgram() -> bool:
     """¿Hay DEEPGRAM_API_KEY en .env.local? Define el stack real (Deepgram vs fallback)."""
     try:
@@ -333,6 +366,13 @@ def _start_room() -> int:
     _wait_ready("claude", lambda: _sock_up(str(CLAUDE_SOCK)), 30)
     _wait_ready("orb", lambda: _port_up(ORB_PORT), 10)
 
+    # 3.5) CRÍTICO (fix cold-start): esperar a que el subsistema de agent-dispatch del server RESPONDA
+    # ANTES de lanzar el worker. El puerto de signaling abre antes que el agent-dispatch; si el worker
+    # registra en esa ventana (cold start, init más lento), el server no puede asignarle jobs y Win+Z
+    # falla hasta reiniciar ("primera vez en frío falla, segunda anda"). Con esto, el worker registra
+    # contra un server ya listo. (En caliente el probe pasa al toque -> no agrega latencia.)
+    _wait_ready("dispatch del server", _dispatch_subsystem_ready, 30)
+
     # 4) worker en modo room. CRÍTICO: LiveKit hace auto-dispatch SOLO al CREARSE el room.
     # Si el browser entra antes de que el worker REGISTRE, el room se crea sin agente y el
     # worker (que registra tarde) nunca se despacha -> no corre entry() -> no hay socket de
@@ -368,12 +408,14 @@ def _start_room() -> int:
 
     # 4.5) DISPATCH explícito del agente al room (proactivo, por API). El agente entra al room y
     # corre entry() -> crea el socket de control ANTES de abrir el browser. Robusto contra pestañas
-    # zombie y timing. Si el socket YA existe, el agente ya está vivo en el room -> no re-despachar.
-    if LK_CTL_SOCK.exists():
-        print("start: agente ya en el room (socket de control presente)")
+    # zombie y timing. Probamos que el socket RESPONDE (no solo que el archivo existe): si el worker
+    # crasheó dejó un socket stale en disco; con .exists() saltábamos el dispatch -> agente nunca
+    # entraba -> Win+Z fallaba. _sock_up() conecta de verdad -> un socket stale cae al dispatch.
+    if _sock_up(str(LK_CTL_SOCK)):
+        print("start: agente ya en el room (socket de control responde)")
     else:
         _ensure_agent_dispatched()
-        _wait_ready("agente en el room", lambda: LK_CTL_SOCK.exists(), 15)
+        _wait_ready("agente en el room", lambda: _sock_up(str(LK_CTL_SOCK)), 15)
 
     # 5) abrir el browser cliente (el agente YA está en el room -> al entrar, lo encuentra)
     try:

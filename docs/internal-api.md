@@ -8,8 +8,8 @@ saga no expone API de red pública. Sus "APIs" son: **endpoints HTTP locales del
 
 ## HTTP — orbe (`orb/orb_server.py`, `127.0.0.1:8777`)
 
-Stdlib only salvo `/token`, que importa `livekit.api` lazy (el orbe en modo console nunca
-pega ahí). Auth opcional por `ORB_TOKEN` (vacío = sin auth, local). Solo loopback.
+Stdlib only salvo `/token`, que importa `livekit.api` lazy (solo lo toca ese handler).
+Auth opcional por `ORB_TOKEN` (vacío = sin auth, local). Solo loopback.
 
 | Método | Path | Qué hace | Respuesta |
 |--------|------|----------|-----------|
@@ -35,11 +35,10 @@ Emite el JWT con el que el cliente browser se une al room de `livekit-server`. Q
 { "url": "ws://127.0.0.1:7880", "token": "<jwt>", "room": "saga" }
 ```
 
-Mintea con `livekit.api.AccessToken` (import lazy): `.with_identity()` + `.with_grants(VideoGrants(room_join=True, room=...))`
-+ `.with_room_config(RoomConfiguration(agents=[RoomAgentDispatch(agent_name=LIVEKIT_AGENT_NAME)]))`.
-El `RoomConfiguration` pide **dispatch explícito** del agente nombrado `saga` → el server lo
-despacha al entrar el cliente, sin depender de que el worker esté listo antes (lo que rompía el
-auto-dispatch). Sin `LIVEKIT_API_KEY`/`SECRET` → `500`.
+Mintea con `livekit.api.AccessToken` (import lazy): `.with_identity()` + `.with_grants(VideoGrants(room_join=True, room=...))`.
+El token es **solo para unirse al room**: el dispatch del agente lo hace `saga-ctl` por API de forma
+PROACTIVA (`_ensure_agent_dispatched`) al arrancar, ANTES del browser → **fuente de dispatch ÚNICA**
+(antes el token traía además `RoomConfiguration` → doble vía; se sacó). Sin `LIVEKIT_API_KEY`/`SECRET` → `500`.
 
 ## Socket de control del agente — `LK_CTL_SOCK` = `/tmp/saga-lk-ctl.sock` (0o600)
 
@@ -53,6 +52,7 @@ solo cuando el agente ya entró (lo que `vcctl` espera como readiness).
 
 **Owner**: `lk/agent.py` (handler `_handle` → `_press`/`_say`/`stage_text`). **Clientes**:
 `vc/app._livekit_toggle` (Win+Z, manda `press`), `orb_server._forward_ctl` (panel: `stage`/`say`).
+El socket lo crea el worker recién al despacharse al room → existe solo cuando el agente ya entró.
 
 ## Socket del cerebro Claude — `CLAUDE_SOCK` = `/tmp/saga-claude.sock` (0o600)
 
@@ -68,19 +68,10 @@ found"), respawnea con sesión fresca y reintenta una vez.
 
 **Owner**: `claude_daemon.py`. **Cliente**: `vc/claudecli`.
 
-## Socket del daemon Whisper — `/tmp/saga-whisper.sock` (0o600, flujo clásico)
+## LiveKit (modo room, único — Ciclo 4)
 
-Protocolo: newline-delimited JSON.
-- **req**: `{"audio": "<path wav>", "lang": "es"}`
-- **resp**: `{"ok": true, "text": "..."}` | `{"ok": false, "error": "..."}`
-
-**Owner**: `whisper_daemon.py`. **Cliente**: `vc/stt`.
-
-## LiveKit (modo room, Ciclo 4)
-
-Transporte por default (`SAGA_TRANSPORT=room`): worker headless conectado a un `livekit-server`
+Único transporte: worker headless conectado a un `livekit-server`
 NATIVO local (no Docker: el NAT rompía el WebRTC). El audio llega por el track del browser cliente.
-`SAGA_TRANSPORT=console` cae al fallback dev (audio local en el proceso, sin server).
 
 ### Constantes (`vc/config.py`, `.env.local` cargado al importar)
 
@@ -93,15 +84,14 @@ NATIVO local (no Docker: el NAT rompía el WebRTC). El audio llega por el track 
 | `LIVEKIT_SERVER_BIN` | `~/.local/bin/livekit-server` | binario del server (lo levanta `saga-ctl`) |
 | `LIVEKIT_CONFIG` | `livekit.yaml` | config del server (bind loopback) |
 | `LIVEKIT_SIGNAL_PORT` | `7880` | puerto de signaling (readiness del server) |
-| `SAGA_TRANSPORT` | `room` | `room` o `console` |
 
 Las keys viven SOLO en `.env.local` (gitignored). `vc/config` carga `.env.local` con `python-dotenv`
 al importarse → cualquier importador (worker, `orb_server` en `/token`) ve las keys.
 
 ### API de LiveKit usada
 
-- **Token de cliente** (`orb_server._serve_token`): `AccessToken` + `VideoGrants(room_join)` +
-  `RoomConfiguration(agents=[RoomAgentDispatch(agent_name)])` → `.to_jwt()`.
+- **Token de cliente** (`orb_server._serve_token`): `AccessToken` + `VideoGrants(room_join)` →
+  `.to_jwt()`. Solo para unirse; NO despacha (el dispatch es por API, abajo).
 - **Dispatch por API** (`vcctl._ensure_agent_dispatched`, proactivo al `start`): con
   `api.LiveKitAPI(http_url, key, secret).agent_dispatch`:
   - `list_dispatch(room_name)` → borra dispatches **huérfanos** (worker muerto dejó el record) con

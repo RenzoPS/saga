@@ -8,7 +8,7 @@ barge-in. Nosotros enchufamos las piezas:
 La elección la decide la presencia de DEEPGRAM_API_KEY (.env.local), NO un flag.
 
 Fin de turno por SILENCIO (turn_detection="vad", ~2s). Win+Z es una máquina de 3
-fases (como el flujo clásico):
+fases:
   - idle -> graba (mic ON)
   - rec  -> corta y manda el turno (commit_user_turn)
   - busy -> mata la respuesta en curso (interrupt) y vuelve a idle
@@ -25,6 +25,7 @@ el track del mic (WakeWordTrackDetector), reusando el modelo Python.
 
 import os
 import sys
+import atexit
 import base64
 import asyncio
 
@@ -91,6 +92,10 @@ def _build_tts():
 # cuando entry() retorna; la sesión sigue viva en tasks de fondo).
 _ctl_server = None
 
+# Al salir el worker, borrar el socket de control para no dejarlo stale (un archivo huérfano
+# ya no rompe el dispatch porque saga-ctl prueba _sock_up, pero igual deja /tmp limpio).
+atexit.register(lambda: LK_CTL_SOCK.unlink(missing_ok=True))
+
 
 class Assistant(Agent):
     def __init__(self) -> None:
@@ -122,7 +127,7 @@ async def entry(ctx: "agents.JobContext") -> None:
         llm=ClaudeCodeLLM(),
         tts=_build_tts(),      # Deepgram Aura por default; edge-tts si no hay key
         # Fin de turno por SILENCIO (VAD): ~2s de silencio cierra el turno y manda el
-        # prompt (como el flujo clásico). Sin esperar al modelo lingüístico.
+        # prompt. Sin esperar al modelo lingüístico.
         # TODA la config de turnos va ACÁ (los params top-level tipo preemptive_generation/
         # min_endpointing_delay están DEPRECADOS y se ignoran cuando se pasa turn_handling).
         turn_handling={
@@ -144,7 +149,7 @@ async def entry(ctx: "agents.JobContext") -> None:
         # (El timeout "no hablaste -> no te entendí" lo maneja un timer PROPIO abajo, VAD-aware.)
     )
 
-    # Fase del flujo (gobierna qué hace Win+Z, igual que el flujo clásico):
+    # Fase del flujo (gobierna qué hace Win+Z):
     #   idle  -> nada corriendo (mic apagado)
     #   rec   -> grabando tu voz (mic abierto)
     #   busy  -> procesando: transcribiendo / pensando / hablando

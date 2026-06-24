@@ -2,7 +2,7 @@
 """Server persistente del orbe de saga.
 
 Sirve orb.html (+ vendor local de three.js) en localhost y emite por SSE el
-estado actual (canal confiable, no se pierde). saga.py hace POST /state?s=<fase>.
+estado actual (canal confiable, no se pierde). El agente hace POST /state?s=<fase> (vc/orb.orb_state).
 (El nivel de audio se removió: el orbe anima stylized, no recibe audio.)
 Endpoints de entrada del panel del orbe (reenvian al socket o escriben /tmp, sin tocar el stack de voz):
   POST /attach?kind=image  -> imagen pegada -> dead-drop en /tmp (binaria, Claude la lee de disco).
@@ -14,7 +14,7 @@ Endpoints de entrada del panel del orbe (reenvian al socket o escriben /tmp, sin
                               une al room de livekit-server. Mintea con livekit.api (import lazy;
                               el resto del módulo sigue stdlib-only).
 Stdlib + paths/constantes de vc.config. La única dep pip es livekit-api, y SOLO se importa
-dentro de /token (lazy) -> el orbe en modo console no la necesita.
+dentro de /token (lazy) -> el resto del módulo es stdlib puro.
 
 Estados: idle, rec, transcribe, screen, think, speak, nueva, error, cancel, attach.
 """
@@ -37,7 +37,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 from vc.config import (
     ATTACH_IMG_PATH, LK_CTL_SOCK,
-    LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_ROOM, LIVEKIT_AGENT_NAME,
+    LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_ROOM,
 )
 
 PORT = int(os.environ.get("ORB_PORT", "8777"))
@@ -141,7 +141,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _serve_token(self):
         """Emite el JWT del cliente para unirse al room. GET /token?identity=&room=.
-        Mintea con livekit.api (import lazy: el orbe en modo console nunca pega acá).
+        Mintea con livekit.api (import lazy: solo /token la necesita).
         Respuesta: {"url": "ws://127.0.0.1:7880", "token": "<jwt>", "room": "saga", "wake": <bool>}.
         `wake` (U4): si true, el cliente publica el mic DESMUTEADO siempre (el server oye "hey saga")."""
         if not LIVEKIT_API_KEY or not LIVEKIT_API_SECRET:
@@ -156,11 +156,9 @@ class Handler(BaseHTTPRequestHandler):
                 api.AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
                 .with_identity(identity)
                 .with_grants(api.VideoGrants(room_join=True, room=room))
-                # Dispatch EXPLÍCITO: el server despacha al agente nombrado cuando este cliente
-                # crea/entra al room -> no depende de que el worker esté listo antes (auto-dispatch).
-                .with_room_config(api.RoomConfiguration(
-                    agents=[api.RoomAgentDispatch(agent_name=LIVEKIT_AGENT_NAME)]
-                ))
+                # El token es SOLO para unirse al room. El dispatch del agente es ÚNICO y PROACTIVO:
+                # lo hace saga-ctl (_ensure_agent_dispatched, por API) al arrancar, ANTES del browser.
+                # (Antes el token traía además RoomConfiguration -> doble vía de dispatch; se sacó.)
                 .to_jwt()
             )
         except Exception as e:  # noqa: BLE001 - degradar a 500 con causa

@@ -6,13 +6,13 @@ Cómo prender, apagar, observar y diagnosticar saga. Para el detalle del stack L
 
 ```bash
 saga-ctl start      # levanta server nativo + Claude + orbe + worker + dispatch + browser + monitor
-saga-ctl status     # transporte, stack (Deepgram vs fallback), server, worker, daemons, readiness
+saga-ctl status     # stack (Deepgram vs fallback), server, worker, daemons, readiness
 saga-ctl stop       # apaga todo (incluido el binario livekit-server) + limpia sockets/tmp
 saga-ctl restart    # stop + start
 ```
 
-`saga-ctl` es `vcctl.py` (wrapper en `~/.local/bin/saga-ctl`). En modo room (default), `start` levanta las
-piezas en orden con readiness por pieza:
+`saga-ctl` es `vcctl.py` (wrapper en `~/.local/bin/saga-ctl`). `start` levanta las piezas del modo room
+(único modo) en orden con readiness por pieza:
 
 1. `livekit-server` (binario nativo, `~/.local/bin/`) con `NODE_IP` auto-detectada y `LIVEKIT_KEYS` de `.env.local`.
 2. `claude_daemon` (cerebro caliente) — `prewarm_claude()`, dedup-safe.
@@ -25,7 +25,6 @@ Siempre con el venv del proyecto: `.venv/bin/python`.
 
 ```bash
 .venv/bin/python lk/agent.py start     # worker en modo room (lo lanza saga-ctl; rara vez a mano)
-.venv/bin/python lk/agent.py console   # fallback audio local, SIN server (transporte console)
 ```
 
 ## Uso (Win+Z, push-to-talk)
@@ -39,14 +38,8 @@ Ver `turn-flow.md` para el detalle.
 
 ## Procesos
 
-**Modo room (default):** `livekit-server` (binario nativo) · `lk/agent.py start` (worker) ·
+**Modo room (único):** `livekit-server` (binario nativo) · `lk/agent.py start` (worker) ·
 `claude_daemon.py` (cerebro) · `orb/orb_server.py` (orbe + `/token`). El cliente vive en el browser.
-
-**Transporte console (fallback sin server):** `lk/agent.py console` (agente, dueño del audio local) ·
-`claude_daemon.py` · `orb_server.py`.
-
-**Flujo clásico (`VOICE_LIVEKIT=0`):** `whisper_daemon.py` · `claude_daemon.py` · `orb_server.py` ·
-(opcional) `wake_daemon.py`.
 
 Ver procesos:
 ```bash
@@ -69,12 +62,9 @@ tail -F saga.log
 
 | Var | Default | Qué hace |
 |-----|---------|----------|
-| `SAGA_TRANSPORT` | `room` | `=console` usa audio local sin server (fallback). Solo aplica con LiveKit ON |
-| `VOICE_LIVEKIT` | `1` | `=0` vuelve al flujo clásico (whisper/edge), por debajo de cualquier transporte |
 | `VOICE_CLAUDE_SAFE` | (off) | `=1` desactiva `--dangerously-skip-permissions` |
 | `VOICE_CLAUDE_MEM` | `0` | `=1` activa claude-mem en voz (+2-7s/turno; respawnear daemon) |
-| `VOICE_WAKE_ENABLED` | `0` | `=1` activa el wake word Vosk (requiere el modelo en `models/`) |
-| `VOICE_AUTOSTOP` | `1` | auto-stop por silencio en Win+Z clásico |
+| `SAGA_WAKE_ENABLED` | `0` | `=1` activa el wake "hey saga" server-side en el agente |
 | `ORB_PORT` | `8777` | puerto del server del orbe |
 
 El stack STT/TTS **no es env**: lo decide la presencia de `DEEPGRAM_API_KEY` en `.env.local`.
@@ -91,7 +81,7 @@ Binarios requeridos: `claude` (crítico), `mpg123`/`pacat`/`paplay` (audio), `gr
 ## Troubleshooting (modo room)
 
 - **`saga-ctl start` dice "NO existe el binario livekit-server"** → bajá el release oficial de
-  `livekit/livekit` a `~/.local/bin/`, o caé al fallback con `SAGA_TRANSPORT=console` (audio local, sin server).
+  `livekit/livekit` a `~/.local/bin/` (es requisito del único modo room).
 - **"faltan LIVEKIT_API_KEY/SECRET"** → completá `.env.local` (`LIVEKIT_API_KEY/SECRET` + `LIVEKIT_URL/ROOM`).
 - **El server no levanta a tiempo** (`livekit-server NO levantó`) → mirá `livekit_server.log`. Chequeá que el
   puerto de signaling no esté ocupado y que `NODE_IP` resuelva a la IP de LAN real (LiveKit no bindea el UDP de
@@ -101,7 +91,7 @@ Binarios requeridos: `claude` (crítico), `mpg123`/`pacat`/`paplay` (audio), `gr
 - **Win+Z falla con `FileNotFoundError` (socket de control)** → el agente no entró al room (dispatch huérfano
   o pestaña zombie que creó el room antes del worker). `saga-ctl restart`: re-despacha (borra huérfanos + crea
   fresco) y abre el browser después de que el agente ya esté en el room.
-- **Verificá el estado en una pasada**: `saga-ctl status` muestra transporte, server (`:port UP/DOWN`),
+- **Verificá el estado en una pasada**: `saga-ctl status` muestra stack, server (`:port UP/DOWN`),
   worker, daemons y readiness de sockets.
 - **Benchmark de latencia**: ver `aidlc-docs/construction/build-and-test/ciclo4-build-and-test.md`.
 
@@ -124,8 +114,8 @@ Binarios requeridos: `claude` (crítico), `mpg123`/`pacat`/`paplay` (audio), `gr
 - **El stack lo decide la key**, no un flag. No agregar flags para elegir proveedor.
 - **`orb.html`: colores de fondo en sRGB** (`THREE.SRGBColorSpace`), sino el bloom revienta a blanco.
 - **Whisper `beam>=3`** (greedy/beam=1 dispara loops de alucinación).
-- **El orbe SÍ sincroniza con la voz real en modo room** (Web Audio AnalyserNode sobre el track TTS). El viejo
-  "NO sincroniza" aplica solo a console/clásico (audio en pacat, otro proceso → sync HTTP nunca quedó fino).
+- **El orbe sincroniza con la voz real** (Web Audio AnalyserNode sobre el track TTS): el browser es
+  participante del room, recibe el track y mide el nivel real.
 
 ## Verificación (smoke check)
 

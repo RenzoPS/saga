@@ -14,12 +14,12 @@ saga es **push-to-talk** con Win+Z, una máquina de 3 fases.
 Además, en **rec** el turno también se cierra solo: lo decide el **turn detector
 semántico** (no solo el silencio), sin segundo Win+Z. Ver abajo.
 
-## Modo LiveKit / ROOM (default, Ciclo 4)
+## Modo room (único, Ciclo 4)
 
-En **room** el worker (`lk/agent.py start`) está conectado a `livekit-server` y es
+El worker (`lk/agent.py start`) está conectado a `livekit-server` y es
 **headless**: el mic lo **publica el BROWSER** (cliente orbe). El track llega muteado y
-se desmutea cuando el orbe entra en `rec` (vía SSE). En room el track detached descarta
-frames → no hay backlog (esto resolvió el bug del buffer del modo console).
+se desmutea cuando el orbe entra en `rec` (vía SSE). El track detached descarta
+frames cuando el mic está apagado → no hay backlog de audio.
 
 ```mermaid
 sequenceDiagram
@@ -117,28 +117,15 @@ EOU 2.0 + ttft 2.2 + ttfb 0.3. El `min_delay=2.0` es una **decisión** (anti-cho
 no una regresión; bajarlo acelera pero reintroduce chopping. Detalle en
 `aidlc-docs/construction/build-and-test/ciclo4-build-and-test.md`.
 
-## Modo CONSOLE (fallback dev)
+## Wake word
 
-`lk/agent.py console` corre el runtime de audio **local** (mic del proceso, sin server).
-Tiene el bug conocido del buffer (Ciclo 3) y el wake server-side (`SAGA_WAKE_ENABLED=1`)
-SOLO corre acá. En room el wake corre en el cliente (onnxruntime-web). BVC (noise
-cancellation) también es solo console: en room requiere LiveKit Cloud.
-
-## Modo clásico (fallback, `VOICE_LIVEKIT=0`)
-
-Cada Win+Z corre un proceso efímero (`vc/app.py:_do_turn`):
-
-1. `record_until_signaled()` — graba con auto-stop por VAD de voz (Silero).
-2. `transcribe()` — daemon Whisper caliente (o fallback inline).
-3. Chequeo de keywords: reset (`is_reset_command`) o visión (`is_visual_command`).
-4. `ask_claude_stream()` — cerebro (daemon o one-shot).
-5. `stream_to_sentences()` + `TTSStreamer` — microchunking → edge-tts → mpg123.
-
-Estados de retorno de `_do_turn`: `ok` · `cancel` · `short` · `empty` · `reset` · `error`.
+El wake "hey saga" es **opt-in** (`SAGA_WAKE_ENABLED=1`) y corre server-side en el agente.
+Por default el trigger es Win+Z. BVC (noise cancellation) NO se usa: requiere LiveKit Cloud;
+room se apoya en el VAD Silero.
 
 ## Comandos de voz y variantes
 
-El turn handler del modo default es `lk/claude_llm.py` (reusa helpers de `vc/`):
+El turn handler es `lk/claude_llm.py` (reusa helpers de `vc/`):
 
 - **Reset de sesión**: "nueva sesión", "empezamos de cero"… → `reset_claude()` (el daemon
   respawnea), orbe `nueva`, confirmación hablada sin mandar la consigna a Claude
@@ -157,11 +144,9 @@ El turn handler del modo default es `lk/claude_llm.py` (reusa helpers de `vc/`):
 
 ## Cancelación / barge-in
 
-- Modo room/console: Win+Z en `busy` → `session.interrupt(force=True)` corta TTS + cancela
-  el LLM, y `clear_user_turn()` + mic off (sin zombie). Orbe `cancel`. Barge-in por voz =
-  VAD local (silero, `interruption.mode="vad"`). En `claude_llm`, si LiveKit cancela el
-  turno, setea el flag global `_cancel` que corta el generador del daemon.
-- Modo clásico: `SIGUSR2` → setea el evento global `_cancel`, mata el proceso `claude` y el
-  streamer TTS.
+Win+Z en `busy` → `session.interrupt(force=True)` corta TTS + cancela
+el LLM, y `clear_user_turn()` + mic off (sin zombie). Orbe `cancel`. Barge-in por voz =
+VAD local (silero, `interruption.mode="vad"`). En `claude_llm`, si LiveKit cancela el
+turno, setea el flag global `_cancel` que corta el generador del daemon.
 
 Para los contratos de socket que disparan todo esto, ver `internal-api.md`.

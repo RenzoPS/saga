@@ -13,7 +13,7 @@ Uso:
 
 Salida: models/hey_saga/hey_saga.onnx
 Activar: SAGA_WAKE_ENABLED=1 SAGA_WAKE_MODEL=models/hey_saga/hey_saga.onnx \\
-         .venv/bin/python lk/agent.py console
+         .venv/bin/python lk/agent.py start
 """
 
 import os
@@ -68,4 +68,4 @@ print()
 print("Listo. Para activar wake word:")
 print(f"  export SAGA_WAKE_ENABLED=1")
 print(f"  export SAGA_WAKE_MODEL={onnx_path}")
-print(f"  .venv/bin/python lk/agent.py console")
+print(f"  .venv/bin/python lk/agent.py start")

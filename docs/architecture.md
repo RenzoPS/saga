@@ -57,20 +57,23 @@ vía SSE) → el server enruta el track al worker → STT (Deepgram) transcribe 
 cierran el turno → LLM (Claude vía daemon) → TTS (Deepgram) genera la voz → el worker **publica el track TTS**
 al room → el browser lo reproduce y **anima el orbe con el nivel real de la voz** (Web Audio AnalyserNode).
 
-## Tres transportes (según `SAGA_TRANSPORT` / `VOICE_LIVEKIT`)
+## Modo único: room (LiveKit + transporte WebRTC)
 
-| | Modo room (default) | Modo console (fallback dev) | Modo clásico (`VOICE_LIVEKIT=0`) |
-|---|---|---|---|
-| Selección | `SAGA_TRANSPORT=room` | `SAGA_TRANSPORT=console` | `VOICE_LIVEKIT=0` |
-| Dueño del audio | `lk/agent.py start` (LiveKit-agents, vía server) | `lk/agent.py console` (audio local, sin server) | proceso efímero por Win+Z (`vc/app.py`) |
-| Transporte | WebRTC (server ↔ browser ↔ worker) | TCP local de console | sounddevice local |
-| Captura/VAD/turn/barge-in | LiveKit (Silero VAD + turn detector semántico) | LiveKit | `vc/audio.py` (sounddevice + VAD Silero) |
-| STT | Deepgram Nova-3 (o whisper local) | idem | `whisper_daemon.py` (faster-whisper caliente) |
-| TTS | Deepgram Aura-2 (o edge-tts) | idem | `vc/tts.py` (edge-tts → mpg123) |
-| Sync del orbe | sí (track TTS real → Web Audio) | no (stylized) | no (stylized) |
-| Wake word | — (Win+Z; U4 client-wake diferido) | — | `wake_daemon.py` (Vosk, OFF por default) |
+saga tiene **un solo modo de transporte**: room. El audio viaja por WebRTC entre server, browser cliente y
+worker (ver topología arriba). El Ciclo 4 (U7) eliminó el transporte console y el flujo clásico standalone.
 
-**El stack STT/TTS lo decide la presencia de `DEEPGRAM_API_KEY`** en `.env.local`, no un flag.
+| Pieza | Cómo |
+|---|---|
+| Dueño del audio | `lk/agent.py start` (LiveKit-agents, conectado al server) |
+| Transporte | WebRTC (server ↔ browser ↔ worker) |
+| Captura/VAD/turn/barge-in | LiveKit (Silero VAD + turn detector semántico) |
+| STT | Deepgram Nova-3 (o faster-whisper local, `lk/whisper_stt.py`, sin key) |
+| TTS | Deepgram Aura-2 (o edge-tts local, `lk/edge_tts_plugin.py`, sin key) |
+| Sync del orbe | sí (track TTS real → Web Audio AnalyserNode) |
+| Wake word | Win+Z; "hey saga" server-side opt-in (`SAGA_WAKE_ENABLED=1`) |
+
+**El stack STT/TTS lo decide la presencia de `DEEPGRAM_API_KEY`** en `.env.local`, no un flag. El fallback
+local (faster-whisper + edge-tts) corre DENTRO del agente, sin daemons separados.
 
 ## Capas del modo room
 
@@ -97,15 +100,17 @@ al room → el browser lo reproduce y **anima el orbe con el nivel real de la vo
 
 - **`livekit-server`** — server WebRTC nativo: hostea el room, enruta los tracks de audio entre cliente y worker.
 - **`lk/agent.py`** — worker LiveKit: arma el `AgentSession` (STT+VAD+turn+LLM+TTS), socket de control, agente
-  nombrado para dispatch explícito. En modo console (fallback) además levanta el orbe y precalienta Claude.
-- **`lk/claude_llm.py`** — el turn handler real del modo default: toma el último turno, engancha comandos de voz
+  nombrado para dispatch explícito. Levanta el orbe y precalienta Claude (dedup-safe).
+- **`lk/claude_llm.py`** — el turn handler real: toma el último turno, engancha comandos de voz
   (reset, visión), consume adjuntos, delega en `claude_daemon`.
+- **`lk/whisper_stt.py` + `lk/edge_tts_plugin.py`** — adaptadores STT/TTS de fallback local (faster-whisper +
+  edge-tts) que corren DENTRO del agente cuando no hay `DEEPGRAM_API_KEY`.
 - **`claude_daemon.py` + `vc/claudecli.py`** — el cerebro: un proceso `claude` caliente (stream-json) + cliente
   con fallback a one-shot.
 - **`orb/orb_server.py` + `vc/orb.py`** — orbe: server SSE local + endpoint `/token` (JWT del cliente) + puente
   HTTP→socket (el browser no puede abrir un Unix socket).
-- **`vc/`** — soporte reusado: config, sesión, adjuntos, escritorio, runtime, guard, STT/TTS/audio.
-- **Daemons del flujo clásico** — `whisper_daemon.py` (STT caliente), `wake_daemon.py` (Vosk).
+- **`vc/`** — soporte reusado: config, sesión, adjuntos, escritorio, runtime, guard.
+- **`wake_daemon.py`** — wake word Vosk, DORMIDO (fuera de scope; el wake activo es "hey saga" server-side en el agente).
 
 ## Integraciones y transporte
 
@@ -114,19 +119,18 @@ al room → el browser lo reproduce y **anima el orbe con el nivel real de la vo
   (audio), `hyprctl`/`kitty`/`xdg-open` (escritorio).
 - **Transporte de audio (room)**: WebRTC entre browser ↔ server ↔ worker (loopback ~ms). Signaling en
   `127.0.0.1:7880`; media UDP `:7882` por la IP de LAN.
-- **Transporte de control local**: sockets Unix (control del agente `LK_CTL_SOCK`, cerebro, whisper) con perms
+- **Transporte de control local**: sockets Unix (control del agente `LK_CTL_SOCK`, cerebro) con perms
   `0o600` + HTTP loopback `127.0.0.1:8777` (orbe + token). Ver `internal-api.md`.
-- **Estado**: sin base de datos. `session.json` (uuid de sesión), `word_aliases.json` (fonetizaciones),
-  efímeros en `/tmp` (tmpfs).
+- **Estado**: sin base de datos. `session.json` (uuid de sesión) + efímeros en `/tmp` (tmpfs).
 
 ## Decisiones de diseño clave
 
 - **Server nativo, no Docker**: el NAT de Docker sobre localhost rompe el WebRTC (`dtls timeout`); el binario
-  nativo evita el problema. La migración console→room también resolvió el backlog del buffer de audio del modo
-  console: en room el worker descarta los frames con el track detached (mecanismo nativo `room_io/_input.py`).
+  nativo evita el problema. El modo room además descarta los frames con el track detached cuando el mic está
+  apagado (mecanismo nativo `room_io/_input.py`) → sin backlog de audio.
 - **Dispatch explícito**: el worker no auto-despacha; saga-ctl crea el dispatch al arrancar → el agente entra al
   room antes que el browser (sin `FileNotFoundError` por pestañas zombie).
-- **Degradación elegante**: room→console→clásico; Deepgram→whisper/edge; daemon→one-shot; guard fail-open.
+- **Degradación elegante**: Deepgram→whisper/edge (dentro del agente); daemon→one-shot; guard fail-open.
   Nunca queda mudo.
 - **Daemons calientes**: matan el cold-start por turno (modelo/plugins/sesión en RAM).
 - **god-mode + guard**: Claude corre con `--dangerously-skip-permissions`; un hook (`vc/guard.py`) bloquea

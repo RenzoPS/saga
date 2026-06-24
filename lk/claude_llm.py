@@ -61,8 +61,8 @@ class _ClaudeStream(llm.LLMStream):
         # borra el worker tras mandarla (igual que el screenshot). Imagen pegada > "mirá pantalla".
         voice = _last_user_text(self._chat_ctx)
 
-        # Reset por voz ("nueva sesión", "empezamos de cero", etc.): mismo enganche que el
-        # flujo clásico (vc/app.py), portado al turn handler de LiveKit. Resetea la sesión de
+        # Reset por voz ("nueva sesión", "empezamos de cero", etc.): enganchado en el turn
+        # handler de LiveKit. Resetea la sesión de
         # Claude (el daemon respawnea) y cortamos el turno con una confirmación hablada, sin
         # mandar la consigna a Claude. No tocamos un adjunto pegado: take_staged() queda para
         # el próximo turno real.
@@ -98,7 +98,7 @@ class _ClaudeStream(llm.LLMStream):
                     orb_state("screen")
                     log("[lk] adjunto imagen -> a Claude")
                 # Visión: si NO pegaste imagen pero el prompt referencia algo visual ("mirá",
-                # "pantalla", etc.), capturamos screenshot. Igual que el flujo clásico.
+                # "pantalla", etc.), capturamos screenshot.
                 elif is_visual_command(prompt):
                     shot = take_screenshot()
                     if shot is not None:

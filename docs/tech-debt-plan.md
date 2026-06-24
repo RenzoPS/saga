@@ -5,9 +5,12 @@ código. Detectada durante el análisis del código.
 
 > **Actualización Ciclo 4 (migración console → modo room, 2026-06-23).** La migración resolvió deuda
 > que estaba documentada como *limitación de runtime* del modo console (no estaba en la tabla D1-R2 de
-> abajo, pero era deuda real). Ver la sección **"Resuelto por el Ciclo 4"**. La tabla D1-R2 (plan de
-> remediación del análisis de código) sigue **abierta**: el Ciclo 4 NO la ejecutó (era una oportunidad
-> de limpiar D1, pero el ciclo se cerró sin tocarla).
+> abajo, pero era deuda real). Ver la sección **"Resuelto por el Ciclo 4"**.
+>
+> **Actualización U7 (modo único room, 2026-06-23).** El refactor U7 **eliminó el transporte console y
+> el flujo clásico standalone** (`vc/app.py:_do_turn`, `whisper_daemon.py`, `vc/audio.py`/`stt.py`/`tts.py`,
+> env `VOICE_LIVEKIT`/`SAGA_TRANSPORT`/`VOICE_WAKE_ENABLED`/`VOICE_AUTOSTOP`). Esto **cerró D1 de raíz**:
+> ya no hay lógica de turno duplicada (`lk/claude_llm.py` es el único turn handler). Ver D1 abajo.
 
 ## Resuelto por el Ciclo 4 (migración a modo room)
 
@@ -24,10 +27,10 @@ por el usuario, 10/10). Referencia: `aidlc-docs/construction/build-and-test/cicl
 
 | # | Ítem | Dónde | Severidad |
 |---|------|-------|-----------|
-| D1 | Lógica de turno **duplicada** clásico vs LiveKit | `vc/app.py:_do_turn` y `lk/claude_llm.py` | Media-alta |
+| D1 | Lógica de turno **duplicada** clásico vs LiveKit | `vc/app.py:_do_turn` y `lk/claude_llm.py` | ✅ Resuelta (U7) |
 | P1 | Path de Win+Z = **glue propio** (socket Unix + SSE), no primitiva LiveKit | `lk/agent.py` + `orb/orb_server.py` | Baja (pulido) |
 | P2 | Volumen de la respuesta **baja** en call de voz (echo-cancellation ducking del browser) | cliente orbe (`orb.html`) | Baja (pulido) |
-| P3 | Ruido de fondo: **BVC es Cloud-only**; en self-hosted está gateado a console | `lk/agent.py` | Baja (evaluar) |
+| P3 | Ruido de fondo: **BVC es Cloud-only**; en self-hosted no se usa (room se apoya en VAD Silero) | `lk/agent.py` | Baja (evaluar) |
 | D2 | Sin lint / typecheck / CI | repo | Media |
 | D3 | LiveKit **sin pin** en `pyproject.toml` | `pyproject.toml` | Media |
 | D4 | `is_goodbye` huérfana (código muerto testeado) | `vc/session.py` + `tests/test_pure.py` | Baja |
@@ -74,16 +77,12 @@ Orden sugerido por relación impacto/esfuerzo/riesgo. Todo es reversible y de ba
   - Confirmar perms `0o600` en todos los artefactos sensibles (wav, screenshot, log, sockets) — ya está, mantener.
   - Considerar un modo "no god" más usable para sesiones de riesgo (`VOICE_CLAUDE_SAFE=1` ya existe).
 
-### 7. D1 — Duplicación clásico/LiveKit (la más estructural, último)
-- **Impacto**: alto a largo plazo (drift: un comando de voz hay que cablearlo en dos lados). **Esfuerzo**: alto. **Riesgo**: medio-alto (toca el flujo en vivo).
-- **Acción**: extraer un núcleo común del turno (detección de keywords → visión → prompt → cancelación)
-  que ambos modos invoquen, dejando a cada modo solo su transporte de audio. Hacerlo **con red**:
-  `git baseline` + verificación en vivo (Win+Z), por ser código no runtime-testeable desde fuera.
-- **Nota**: dejar para el final porque es el único con riesgo real de regresión; los demás son seguros.
-- **Estado post-Ciclo 4**: SIGUE ABIERTA. El Ciclo 4 (migración a room) fue la oportunidad natural de
-  limpiarla, pero el ciclo se cerró sin tocar el flujo del turno (se priorizó estabilizar el transporte).
-  El default sigue siendo `lk/claude_llm.py` (turn handler de room) con el clásico (`vc/app.py`) como
-  fallback → el drift documentado en `CLAUDE.md` persiste.
+### 7. D1 — Duplicación clásico/LiveKit — ✅ RESUELTA (U7)
+- **Impacto (histórico)**: alto a largo plazo (drift: un comando de voz había que cablearlo en dos lados).
+- **Resolución**: el refactor U7 **eliminó el flujo clásico standalone** (`vc/app.py:_do_turn`,
+  `whisper_daemon.py`, `vc/audio.py`/`stt.py`/`tts.py`) en vez de extraer un núcleo común. Ya no hay
+  duplicación: `lk/claude_llm.py` es el **único** turn handler. `vc/app.py` quedó como emisor del `press`
+  de Win+Z + `--doctor`. El drift que documentaba `CLAUDE.md` desapareció.
 
 ## Deuda de pulido del modo room (Ciclo 4) — baja prioridad
 

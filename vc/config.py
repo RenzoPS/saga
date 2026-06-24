@@ -17,9 +17,6 @@ EDGE_PITCH = "+0Hz"
 
 WHISPER_SIZE = os.environ.get("VOICE_WHISPER_SIZE", "small")  # small: preciso (para voz, entender bien > 2s). base = más rápido/menos preciso
 WHISPER_BEAM = int(os.environ.get("VOICE_WHISPER_BEAM", "5"))  # beam5: búsqueda más amplia/robusta con small (preferencia del usuario). beam1 dispara loops
-# Daemon STT: mantiene el modelo caliente en RAM entre invocaciones (mata los ~3s
-# de recarga por Win+Z). transcribe() es cliente; si el daemon esta caido cae a inline.
-WHISPER_SOCK = Path("/tmp/saga-whisper.sock")   # lo chequea `saga --doctor`
 # Params de decodificación de Whisper (faster-whisper en el agente cuando NO hay key Deepgram).
 # temperature como lista = fallback; no_repeat_ngram mata loops.
 WHISPER_DECODE = dict(
@@ -172,10 +169,10 @@ LIVEKIT_URL = os.environ.get("LIVEKIT_URL", "ws://127.0.0.1:7880")
 LIVEKIT_API_KEY = os.environ.get("LIVEKIT_API_KEY", "")
 LIVEKIT_API_SECRET = os.environ.get("LIVEKIT_API_SECRET", "")
 LIVEKIT_ROOM = os.environ.get("LIVEKIT_ROOM", "saga")
-# Nombre del agente para DISPATCH EXPLÍCITO (Ciclo 4): el worker se registra con este nombre y el
-# token del cliente pide explícitamente este agente (RoomConfiguration/RoomAgentDispatch). Así el
-# server lo despacha al entrar el cliente, SIN depender de que el worker esté listo antes de crear
-# el room (lo que rompía el auto-dispatch: una pestaña vieja creaba el room y no había agente).
+# Nombre del agente para DISPATCH EXPLÍCITO (Ciclo 4): el worker se registra con este nombre y
+# saga-ctl lo despacha PROACTIVAMENTE por API (_ensure_agent_dispatched) al arrancar, ANTES del
+# browser. Así no depende de qué cliente crea el room ni del timing (lo que rompía el auto-dispatch:
+# una pestaña vieja creaba el room y no había agente). Fuente de dispatch ÚNICA (el token no despacha).
 LIVEKIT_AGENT_NAME = os.environ.get("LIVEKIT_AGENT_NAME", "saga")
 
 # Server room (Ciclo 4, U6): binario NATIVO + su config. saga-ctl lo levanta/baja en modo room.
@@ -202,9 +199,6 @@ ORB_DIR = PROJECT_DIR / "orb"
 ORB_PORT = int(os.environ.get("ORB_PORT", "8777"))
 ORB_URL = f"http://127.0.0.1:{ORB_PORT}/"
 ORB_SERVER = ORB_DIR / "orb_server.py"
-
-# Diccionario de palabras-problema (JSON editable). Se aplica en clean_for_tts.
-WORD_ALIASES_PATH = PROJECT_DIR / "word_aliases.json"
 
 SESSION_FILE = PROJECT_DIR / "session.json"
 
@@ -233,15 +227,6 @@ WAKE_TRIGGER_PHRASES = ("saga", "hey saga")
 # Arranca permisivo; tunear con las líneas 'final candidato' del log.
 WAKE_MIN_CONF = 0.7
 WAKE_COOLDOWN_S = 2.0  # tras un disparo, ignorar nuevos hasta que pase esto (anti doble-beep)
-# Modo conversación: tras el wake, sigue grabando turnos sin re-decir "claude" hasta
-# que digas una despedida. Match: el texto del turno es CORTO y contiene una frase.
-GOODBYE_KEYWORDS = (
-    "gracias", "muchas gracias", "muchisimas gracias", "muchísimas gracias",
-    "listo", "terminamos", "estamos", "todo ready", "todo listo", "ya esta",
-    "ya está", "eso es todo", "eso seria todo", "eso sería todo", "nada mas",
-    "nada más", "chau", "chao", "perfecto gracias", "dale gracias",
-)
-WAKE_MAX_IDLE_TURNS = 3  # silencios/vacíos seguidos -> cortar la conversación sola
 
 # Regex que matchea CUALQUIER mencion visual como palabra suelta.
 # Usa word boundaries para evitar falsos positivos (ej "admira" no matchea "mira").
