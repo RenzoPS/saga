@@ -13,21 +13,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import tempfile  # noqa: E402
 
-from vc.tts import clean_for_tts, _next_chunk_cut, _HARD_PUNCT_CHARS, TTSStreamer  # noqa: E402
-from vc.session import is_reset_command, is_visual_command, is_goodbye  # noqa: E402
+from vc.session import is_reset_command, is_visual_command  # noqa: E402
 from vc.guard import denied  # noqa: E402
 from vc import attach  # noqa: E402
-
-
-class TestCleanForTTS(unittest.TestCase):
-    def test_strips_markdown_keeps_content(self):
-        self.assertEqual(clean_for_tts("**hola** `code` y *eso*"), "hola code y eso")
-
-    def test_removes_code_blocks(self):
-        self.assertEqual(clean_for_tts("antes ```py\nx=1\n``` despues"), "antes despues")
-
-    def test_collapses_whitespace(self):
-        self.assertEqual(clean_for_tts("a\n\nb   c"), "a. b c")
 
 
 class TestSessionKeywords(unittest.TestCase):
@@ -44,30 +32,6 @@ class TestSessionKeywords(unittest.TestCase):
         self.assertFalse(is_visual_command("admira el cielo"))  # 'mira' embebido no matchea
 
 
-class TestGoodbye(unittest.TestCase):
-    def test_goodbye_positive(self):
-        for t in ["gracias", "muchas gracias", "listo", "dale, gracias",
-                  "terminamos", "todo ready", "chau", "perfecto gracias"]:
-            self.assertTrue(is_goodbye(t), f"debió ser despedida: {t}")
-
-    def test_goodbye_negative_long(self):
-        # frase larga que menciona 'gracias'/'estamos' NO es despedida (guard de longitud)
-        for t in ["gracias por explicarme como funciona el algoritmo",
-                  "estamos hablando de python entonces", "que hora es"]:
-            self.assertFalse(is_goodbye(t), f"NO debió ser despedida: {t}")
-
-
-class TestChunkCut(unittest.TestCase):
-    def test_cuts_on_hard_punct(self):
-        buf = "Hola mundo. Esto sigue"
-        cut = _next_chunk_cut(buf)
-        self.assertIsNotNone(cut)
-        self.assertTrue(buf[:cut].rstrip()[-1] in _HARD_PUNCT_CHARS)
-
-    def test_no_cut_when_short(self):
-        self.assertIsNone(_next_chunk_cut("hola"))
-
-
 class TestGuardDenylist(unittest.TestCase):
     def test_blocks_catastrophic(self):
         for c in ["rm -rf /", "sudo rm -rf ~/x", "dd if=/dev/zero of=/dev/sda",
@@ -80,19 +44,6 @@ class TestGuardDenylist(unittest.TestCase):
         for c in ["sudo pacman -S wmctrl", "echo hola", "ls -la", "git status",
                   "npm install", "rm archivo.txt", "mkdir build", "cat foo.py"]:
             self.assertIsNone(denied(c), f"debió permitir: {c}")
-
-
-class TestTTSFlush(unittest.TestCase):
-    def test_flush_on_sentence_end(self):
-        # punto final + siguiente arranca en mayúscula y no es continuación -> flush
-        self.assertTrue(TTSStreamer._should_flush_after("Hola mundo.", "Otra cosa"))
-
-    def test_no_flush_on_continuation(self):
-        # "y ..." continúa la oración -> no flushear
-        self.assertFalse(TTSStreamer._should_flush_after("Fui al cine.", "y comí algo"))
-
-    def test_no_flush_without_punct(self):
-        self.assertFalse(TTSStreamer._should_flush_after("sin puntuacion", "mas texto"))
 
 
 class TestAttach(unittest.TestCase):

@@ -1,0 +1,24 @@
+# Config de livekit-server NATIVO para saga (modo room, Ciclo 4) — single-node local.
+# Sin Docker: corre como binario (~/.local/bin/livekit-server) -> el WebRTC va sobre la red
+# real de la máquina, sin NAT. SIN secretos acá: las keys entran por la env LIVEKIT_KEYS
+# (saga-ctl la arma desde .env.local). Versionable.
+#
+# Signaling (HTTP/WS) bindeado a loopback -> nadie externo pide token ni se une.
+# Media: UN solo puerto UDP (mux). node_ip se ajusta a la interfaz donde el UDP realmente
+# bindea (ver verificación en vivo).
+
+port: 7880
+bind_addresses:
+  - 127.0.0.1
+
+rtc:
+  udp_port: 7882
+  use_external_ip: false
+  # node_ip NO va acá: se inyecta al arrancar por la env NODE_IP (saga-ctl auto-detecta la IP
+  # de LAN primaria con `ip route get`). LiveKit no bindea el UDP a loopback nunca -> el
+  # candidato tiene que ser la interfaz real donde el UDP sí bindea. Signaling queda en
+  # loopback (bind_addresses) -> nadie externo pide token ni se une; el puerto de media en la
+  # LAN es inerte sin signaling.
+
+logging:
+  level: info

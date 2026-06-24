@@ -10,7 +10,7 @@ import subprocess
 import threading
 import time
 
-from .config import PID_FILE, LOCK_FILE, LOG_FILE
+from .config import LOG_FILE
 
 _LOG_MAX = 512 * 1024  # 512KB -> rota a .old (evita crecimiento infinito)
 
@@ -98,76 +98,3 @@ def cancel_handler(_sig, _frame):
     _cancel.set()
     kill_current_proc()
     cancel_streamer()
-
-
-# ---- helpers de PID-file (coordinacion entre invocaciones efimeras) ----
-def pid_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-        return True
-    except (ProcessLookupError, PermissionError):
-        return False
-
-
-def _proc_starttime(pid: int) -> str:
-    """starttime del proceso (campo 22 de /proc/pid/stat). Identifica una
-    encarnación concreta de un PID -> distingue un PID reciclado de otro proceso."""
-    try:
-        with open(f"/proc/{pid}/stat") as f:
-            data = f.read()
-        return data[data.rindex(")") + 1:].split()[19]   # tras comm: campo 22 = idx 19
-    except (OSError, ValueError, IndexError):
-        return ""
-
-
-def self_identity() -> str:
-    """Identidad propia 'pid:starttime' para lock/pid files (anti PID-recycle)."""
-    pid = os.getpid()
-    return f"{pid}:{_proc_starttime(pid)}"
-
-
-def read_pid_from(path):
-    """Devuelve el pid (int) si el dueño sigue vivo Y es la MISMA encarnación
-    (valida starttime si el archivo lo tiene). Si no, limpia el archivo y None."""
-    if not path.exists():
-        return None
-    try:
-        raw = path.read_text().strip()
-    except OSError:
-        return None
-    try:
-        pid = int(raw.split(":", 1)[0])
-    except ValueError:
-        path.unlink(missing_ok=True)
-        return None
-    if not pid_alive(pid):
-        path.unlink(missing_ok=True)
-        return None
-    if ":" in raw:   # validar starttime -> un PID reciclado no se hace pasar por el dueño
-        start = raw.split(":", 1)[1]
-        if start and start != _proc_starttime(pid):
-            path.unlink(missing_ok=True)
-            return None
-    return pid
-
-
-def read_recorder_pid():
-    return read_pid_from(PID_FILE)
-
-
-def read_owner_pid():
-    return read_pid_from(LOCK_FILE)
-
-
-def signal_stop(pid: int) -> None:
-    try:
-        os.kill(pid, signal.SIGUSR1)
-    except ProcessLookupError:
-        PID_FILE.unlink(missing_ok=True)
-
-
-def signal_cancel(pid: int) -> None:
-    try:
-        os.kill(pid, signal.SIGUSR2)
-    except ProcessLookupError:
-        LOCK_FILE.unlink(missing_ok=True)
