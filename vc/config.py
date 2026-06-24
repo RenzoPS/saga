@@ -167,11 +167,8 @@ LIVEKIT_URL = os.environ.get("LIVEKIT_URL", "ws://127.0.0.1:7880")
 LIVEKIT_API_KEY = os.environ.get("LIVEKIT_API_KEY", "")
 LIVEKIT_API_SECRET = os.environ.get("LIVEKIT_API_SECRET", "")
 LIVEKIT_ROOM = os.environ.get("LIVEKIT_ROOM", "saga")
-# Nombre del agente para DISPATCH EXPLÍCITO (Ciclo 4): el worker se registra con este nombre y
-# saga-ctl lo despacha PROACTIVAMENTE por API (_ensure_agent_dispatched) al arrancar, ANTES del
-# browser. Así no depende de qué cliente crea el room ni del timing (lo que rompía el auto-dispatch:
-# una pestaña vieja creaba el room y no había agente). Fuente de dispatch ÚNICA (el token no despacha).
-LIVEKIT_AGENT_NAME = os.environ.get("LIVEKIT_AGENT_NAME", "saga")
+# (U8) El worker usa DISPATCH AUTOMÁTICO nativo: se registra sin agent_name y el server lo despacha
+# solo cuando el browser crea el room "saga". Ya NO hay un LIVEKIT_AGENT_NAME ni dispatch por API.
 
 # Server room (Ciclo 4, U6): binario NATIVO + su config. saga-ctl lo levanta/baja en modo room.
 # (Se usa el binario, NO Docker: el NAT de Docker rompía el WebRTC local — ver aidlc-docs.)

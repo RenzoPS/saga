@@ -34,7 +34,7 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from livekit import agents, rtc
-from livekit.agents import AgentServer, AgentSession, Agent
+from livekit.agents import AgentServer, AgentSession, Agent, RoomInputOptions
 from livekit.plugins import silero, deepgram   # deepgram: import a nivel módulo (el plugin
 # se registra al importar y DEBE ser en el main thread; importarlo tarde crashea)
 from livekit.plugins.turn_detector.multilingual import MultilingualModel  # EOU semántico (anti-chopping)
@@ -44,7 +44,7 @@ from lk.claude_llm import ClaudeCodeLLM
 from lk.wakeword import WakeWordTrackDetector
 from vc.attach import stage_text, clear_text
 from vc.claudecli import prewarm_claude
-from vc.config import CLAUDE_SYSTEM_PROMPT, LK_CTL_SOCK, ENV_FILE, LIVEKIT_AGENT_NAME
+from vc.config import CLAUDE_SYSTEM_PROMPT, LK_CTL_SOCK, ENV_FILE
 from vc.orb import ensure_orb, orb_state
 from vc.runtime import log
 
@@ -104,13 +104,22 @@ class Assistant(Agent):
         super().__init__(instructions=CLAUDE_SYSTEM_PROMPT)
 
 
-server = AgentServer()
+# Worker dedicado single-tenant (1 usuario, 1 room "saga"):
+# - load_fnc=lambda:0.0 -> el worker NUNCA se auto-marca 'unavailable'. El default mide CPU y, en modo prod
+#   (load_threshold 0.7), se excluye cuando la laptop está cargada en el arranque -> create_dispatch caía en
+#   esa ventana y daba 503 ("coin-flip del dispatch"). El load-shedding es para POOLS de workers; acá hay 1
+#   worker dedicado -> lo neutralizamos. (En self-hosted el load_fnc custom se respeta; sólo se ignora en Cloud.)
+# - drain_timeout=0 -> al SIGTERM cierra al toque (el default 1800s dejaba el worker 'draining' ocupando :8081).
+# - num_idle_processes=1 -> el prod_default es 8 (8 procesos forkeados re-importando los plugins). saga atiende
+#   1 turno a la vez -> 1 proceso caliente alcanza (eficiencia: RAM + menos pico de CPU en el arranque).
+os.environ.pop("LIVEKIT_AGENT_NAME", None)   # si existiera en el shell, el SDK forzaría explicit dispatch
+server = AgentServer(load_fnc=lambda: 0.0, drain_timeout=0, num_idle_processes=1)
 
 
-# agent_name -> el worker se registra como agente NOMBRADO (no auto-dispatch). Se despacha solo
-# cuando el token del cliente lo pide explícitamente (ver /token en orb_server). Robustece el
-# dispatch contra el orden de arranque / pestañas zombie.
-@server.rtc_session(agent_name=LIVEKIT_AGENT_NAME)
+# Sin agent_name -> dispatch AUTOMÁTICO nativo: cuando el browser crea el room "saga", el server despacha
+# este worker solo (sin create_dispatch por API). 1 room fijo / 1 agente = el caso de auto-dispatch. El
+# agente entra junto con el participante (el browser) -> ya no se encuentra solo ni hay race de timing.
+@server.rtc_session()
 async def entry(ctx: "agents.JobContext") -> None:
     global _ctl_server
     ensure_orb()       # orbe (idéntico a vc/)
@@ -271,7 +280,12 @@ async def entry(ctx: "agents.JobContext") -> None:
 
     # Ruido: en room nos apoyamos en el VAD Silero (activation_threshold 0.7). BVC (noise_cancellation)
     # NO aplica self-hosted (requiere LiveKit Cloud: "audio filter cannot be enabled") -> no se usa.
-    await session.start(agent=Assistant(), room=ctx.room)
+    # close_on_disconnect=False: al recargar/cerrar la pestaña del orbe, la sesión (y el job) NO se cierran
+    # -> el socket de control de Win+Z (creado en este entry) SOBREVIVE -> al reconectar el browser sigue
+    # andando. Con el default (True) el job moría con el browser y Win+Z daba ConnectionRefusedError.
+    # Los demás campos de RoomInputOptions quedan en su default (idéntico a no pasarlo): no toca el pipeline.
+    await session.start(agent=Assistant(), room=ctx.room,
+                        room_input_options=RoomInputOptions(close_on_disconnect=False))
 
     # Arrancar con el mic APAGADO: el agente NO escucha hasta que apretás Win+Z.
     session.input.set_audio_enabled(False)

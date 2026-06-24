@@ -36,15 +36,16 @@ Emite el JWT con el que el cliente browser se une al room de `livekit-server`. Q
 ```
 
 Mintea con `livekit.api.AccessToken` (import lazy): `.with_identity()` + `.with_grants(VideoGrants(room_join=True, room=...))`.
-El token es **solo para unirse al room**: el dispatch del agente lo hace `saga-ctl` por API de forma
-PROACTIVA (`_ensure_agent_dispatched`) al arrancar, ANTES del browser → **fuente de dispatch ÚNICA**
-(antes el token traía además `RoomConfiguration` → doble vía; se sacó). Sin `LIVEKIT_API_KEY`/`SECRET` → `500`.
+El token es **solo para unirse al room**: NO despacha. El dispatch del worker es AUTOMÁTICO (U8) — cuando el
+browser se une al room "saga" lo CREA y el server despacha el worker solo (`@server.rtc_session()` sin
+`agent_name`). Sin `LIVEKIT_API_KEY`/`SECRET` → `500`.
 
 ## Socket de control del agente — `LK_CTL_SOCK` = `/tmp/saga-lk-ctl.sock` (0o600)
 
 Protocolo: una línea `verbo [payload_b64]\n` → `ok\n` / `err\n`. Lo crea el worker en `entry()`
-(`asyncio.start_unix_server`), recién al despacharse al room → en modo room el socket existe
-solo cuando el agente ya entró (lo que `vcctl` espera como readiness).
+(`asyncio.start_unix_server`), recién al despacharse al room (dispatch automático disparado por el browser al
+unirse) → el socket existe solo cuando el agente ya entró (lo que `vcctl` espera como readiness, DESPUÉS de
+abrir el browser).
 
 - `press` (o `toggle`) — Win+Z. Acción según fase: idle→grabar, rec→cortar y mandar, busy→matar.
 - `stage <b64>` — setea/limpia el texto staged (memoria del agente, vía `vc/attach.stage_text`).
@@ -52,7 +53,8 @@ solo cuando el agente ya entró (lo que `vcctl` espera como readiness).
 
 **Owner**: `lk/agent.py` (handler `_handle` → `_press`/`_say`/`stage_text`). **Clientes**:
 `vc/app._livekit_toggle` (Win+Z, manda `press`), `orb_server._forward_ctl` (panel: `stage`/`say`).
-El socket lo crea el worker recién al despacharse al room → existe solo cuando el agente ya entró.
+El socket lo crea el worker recién al despacharse al room → existe solo cuando el agente ya entró. Con
+`close_on_disconnect=False` (U8) recargar/cerrar la pestaña del orbe NO mata la sesión ni el socket.
 
 ## Socket del cerebro Claude — `CLAUDE_SOCK` = `/tmp/saga-claude.sock` (0o600)
 
@@ -80,7 +82,6 @@ NATIVO local (no Docker: el NAT rompía el WebRTC). El audio llega por el track 
 | `LIVEKIT_URL` | `ws://127.0.0.1:7880` | URL de signaling (loopback) |
 | `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | `""` (secreto, `.env.local`) | credenciales para mintear/llamar la API |
 | `LIVEKIT_ROOM` | `saga` | nombre del room |
-| `LIVEKIT_AGENT_NAME` | `saga` | nombre del agente para dispatch explícito |
 | `LIVEKIT_SERVER_BIN` | `~/.local/bin/livekit-server` | binario del server (lo levanta `saga-ctl`) |
 | `LIVEKIT_CONFIG` | `livekit.yaml` | config del server (bind loopback) |
 | `LIVEKIT_SIGNAL_PORT` | `7880` | puerto de signaling (readiness del server) |
@@ -91,15 +92,14 @@ al importarse → cualquier importador (worker, `orb_server` en `/token`) ve las
 ### API de LiveKit usada
 
 - **Token de cliente** (`orb_server._serve_token`): `AccessToken` + `VideoGrants(room_join)` →
-  `.to_jwt()`. Solo para unirse; NO despacha (el dispatch es por API, abajo).
-- **Dispatch por API** (`vcctl._ensure_agent_dispatched`, proactivo al `start`): con
-  `api.LiveKitAPI(http_url, key, secret).agent_dispatch`:
-  - `list_dispatch(room_name)` → borra dispatches **huérfanos** (worker muerto dejó el record) con
-    `delete_dispatch(dispatch_id, room_name)`;
-  - `create_dispatch(CreateAgentDispatchRequest(agent_name, room))` → despacha uno fresco.
-
-  Idempotente: el agente entra al room ANTES que el browser, sin depender de qué cliente crea el
-  room ni del timing de arranque (mata la race del auto-dispatch con pestañas zombie).
+  `.to_jwt()`. Solo para unirse; NO despacha.
+- **Dispatch AUTOMÁTICO nativo** (U8): el worker se registra con `@server.rtc_session()` SIN `agent_name`,
+  sobre un `AgentServer(load_fnc=lambda: 0.0, drain_timeout=0, num_idle_processes=1)`. Cuando el browser se
+  une al room "saga", lo CREA y el server despacha el worker solo → `entry()` → socket de control. Ya NO se
+  despacha por API (`_ensure_agent_dispatched` se eliminó de `vcctl.py`). Defensa: `lk/agent.py` hace
+  `os.environ.pop("LIVEKIT_AGENT_NAME", None)` antes de crear el server (si esa env existiera, el SDK forzaría
+  explicit dispatch). `load_fnc=0` → el worker nunca se auto-marca `unavailable` (era la causa raíz del
+  Win+Z `FileNotFoundError` intermitente: el prod `load_threshold=0.7` shedeaba bajo la carga de arranque).
 
 ## Modelos de datos
 
