@@ -30,18 +30,25 @@ ignoran** cuando se pasa `turn_handling`.
 
 ## Correr
 ```bash
-saga-ctl start                            # recomendado (lanza el worker + monitor + crea el dispatch)
+saga-ctl start                            # recomendado (lanza el worker fresco + monitor; el dispatch lo dispara el browser)
 .venv/bin/python lk/agent.py start        # room directo (usa LIVEKIT_URL/API_KEY/API_SECRET de .env.local)
 ```
 
 ### Transporte: ROOM (único)
 Worker headless conectado al livekit-server local. El audio entra por el track del BROWSER (cliente orbe) y el TTS sale por el mismo room. El track detached DESCARTA frames → sin backlog. El wake (opt-in `SAGA_WAKE_ENABLED=1`, U4) corre en el SERVER sobre el track del mic (`WakeWordTrackDetector`), reusando el modelo Python.
 
-### Dispatch EXPLÍCITO (room)
-El worker se registra como agente NOMBRADO: `@server.rtc_session(agent_name="saga")`
-(`LIVEKIT_AGENT_NAME`). **No** hay auto-dispatch: `saga-ctl`/`vcctl` hace
-`create_dispatch` (CreateAgentDispatchRequest) para asignar el agente al room. Robustece
-contra el orden de arranque y pestañas zombie.
+### Dispatch AUTOMÁTICO (room, U8)
+El worker se registra con dispatch nativo: `@server.rtc_session()` **SIN** `agent_name`, sobre un
+`AgentServer(load_fnc=lambda: 0.0, drain_timeout=0, num_idle_processes=1)`. Cuando el browser se une al room
+"saga", lo crea y el server despacha el worker solo → `entry()` → socket de control. **No** se despacha por
+API (se eliminó `_ensure_agent_dispatched` de `vcctl` y `LIVEKIT_AGENT_NAME` de `vc/config`); `lk/agent.py`
+hace `os.environ.pop("LIVEKIT_AGENT_NAME", None)` antes de crear el server (esa env forzaría explicit
+dispatch). `load_fnc=0` → el worker nunca se auto-marca `unavailable`: esa era la causa raíz del Win+Z
+`FileNotFoundError` intermitente (el prod `load_threshold=0.7` shedeaba bajo la carga de arranque →
+load-shedding de pools sobre un worker single-tenant), NO pestañas zombie ni un "server envenenado".
+`drain_timeout=0` → SIGTERM cierra al toque (libera el :8081, antes "draining" lo ocupaba). El worker corre
+con `session.start(..., room_input_options=RoomInputOptions(close_on_disconnect=False))` → recargar/cerrar la
+pestaña del orbe NO mata la sesión ni el socket de Win+Z.
 
 ## Win+Z (3 fases, vía socket de control LK_CTL_SOCK)
 Máquina de 3 fases (`idle`/`rec`/`busy`): idle→graba · rec→corta y manda (`commit_user_turn`) ·

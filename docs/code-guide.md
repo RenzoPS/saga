@@ -9,11 +9,12 @@ son densos y confiables** — leelos en el archivo.
   control del agente (y expone `--doctor`). Es lo que llama el wrapper de Hyprland.
 - **`vcctl.py`** (`saga-ctl`) — control del ciclo de vida: `start/stop/status/restart`. Mata por
   **basename/ruta exacta** leyendo `/proc` (nunca `pkill -f`, que se auto-mataría y pegaría en el
-  `claude` CLI). **`_start_room()`** (único modo, Ciclo 4) orquesta server
-  nativo → cerebro → orbe → worker → dispatch → browser con readiness por pieza. Helpers room: `_node_ip()` (IP LAN
-  primaria por socket UDP, sin subprocess), `_livekit_server_pids()` (match basename `livekit-server`),
-  `_ensure_agent_dispatched()` (borra dispatches huérfanos + `create_dispatch` por API → el agente
-  entra al room antes que el browser). `stop` baja todo, incluido el binario nativo.
+  `claude` CLI). **`_start_room()`** (único modo, Ciclo 4) orquesta server fresco → cerebro → orbe →
+  worker fresco → browser → wait del socket de control, con readiness por pieza. El server y el worker se
+  relanzan FRESCOS en cada `start` (helper `_kill_pids` baja los viejos; claude_daemon y orbe se reusan si ya
+  corren). El dispatch del worker es AUTOMÁTICO (lo dispara el browser al unirse al room) → ya no hay paso de
+  dispatch por API. Helpers room: `_node_ip()` (IP LAN primaria por socket UDP, sin subprocess),
+  `_livekit_server_pids()` (match basename `livekit-server`). `stop` baja todo, incluido el binario nativo.
 - **`claude_daemon.py`** — el cerebro caliente: mantiene UN proceso `claude` (stream-json)
   persistente entre turnos. Gestiona sesión (`--session-id` vs `--resume`), reintento ante sesión
   muerta, timeout por turno (180s), reset, anti doble-arranque, auto-apagado a 1h idle. **Cancel
@@ -30,8 +31,15 @@ son densos y confiables** — leelos en el archivo.
 ## `lk/` — modo LiveKit (room, único)
 
 - **`lk/agent.py`** — el **worker** del modo room (`start`): conectado a `livekit-server`, el audio
-  llega por el track del browser. Se registra como agente NOMBRADO con
-  `@server.rtc_session(agent_name=...)` (dispatch EXPLÍCITO, no auto). Arma el `AgentSession`
+  llega por el track del browser. Construye el server `AgentServer(load_fnc=lambda: 0.0, drain_timeout=0,
+  num_idle_processes=1)` y se registra con **dispatch AUTOMÁTICO** vía `@server.rtc_session()` SIN `agent_name`
+  (U8): el browser, al unirse al room, dispara el dispatch solo. `load_fnc=0` → nunca se auto-marca
+  `unavailable` (era la causa raíz del Win+Z `FileNotFoundError` intermitente: el prod `load_threshold=0.7`
+  shedeaba bajo la carga de arranque). `drain_timeout=0` → SIGTERM cierra al toque (libera el :8081).
+  `num_idle_processes=1` → un solo proceso forkeado (saga atiende 1 turno a la vez). Hace
+  `os.environ.pop("LIVEKIT_AGENT_NAME", None)` antes de crear el server (si esa env existiera, el SDK forzaría
+  explicit dispatch). `session.start(..., room_input_options=RoomInputOptions(close_on_disconnect=False))` →
+  recargar/cerrar la pestaña del orbe NO mata la sesión ni el socket de Win+Z. Arma el `AgentSession`
   (STT+VAD+LLM+TTS) con TODA la config de turnos dentro de `turn_handling`: turn detector SEMÁNTICO
   (`MultilingualModel`, EOU multilingüe), `endpointing` min 2s, `interruption` por VAD local, y
   `preemptive_generation` **OFF** (sobre transcripts parciales rompía el LLM bloqueante). Implementa
@@ -57,9 +65,9 @@ son densos y confiables** — leelos en el archivo.
   (`build_claude_base_args`, compartidos por daemon y one-shot). **Carga `.env.local` al importar**
   (idempotente) para que cualquier importador —incluido `orb_server`, que mintea el JWT— vea las
   keys. Constantes del modo room (Ciclo 4): `LIVEKIT_URL/API_KEY/API_SECRET/ROOM`,
-  `LIVEKIT_AGENT_NAME` (dispatch explícito), `LIVEKIT_SERVER_BIN`/`LIVEKIT_CONFIG`/`LK_SERVER_LOG`,
-  `LIVEKIT_SIGNAL_PORT` (7880). Las keys solo
-  viven en `.env.local`; URL/room/agente tienen default local. Sin lógica.
+  `LIVEKIT_SERVER_BIN`/`LIVEKIT_CONFIG`/`LK_SERVER_LOG`, `LIVEKIT_SIGNAL_PORT` (7880). (La constante
+  `LIVEKIT_AGENT_NAME` se ELIMINÓ en U8: el dispatch es automático, sin agente nombrado.) Las keys solo
+  viven en `.env.local`; URL/room tienen default local. Sin lógica.
 - **`vc/claudecli.py`** — cliente de Claude con dos caminos: daemon (rápido) + fallback one-shot
   (`claude -p`). Maneja imagen (multimodal por stdin), reintento de sesión, y respeta el flag global
   de cancelación.
@@ -87,8 +95,8 @@ son densos y confiables** — leelos en el archivo.
 - **`orb/orb_server.py`** — server persistente (HTTP + SSE), stdlib. Sirve la página, emite estado
   por SSE, y hace de **puente HTTP→socket** para el panel (el browser no puede abrir un socket Unix).
   Endpoint **`/token`** (modo room): mintea el JWT con el que el browser se une al room
-  (`livekit.api.AccessToken`, SOLO para unirse; el dispatch del agente lo hace `saga-ctl` por API,
-  no el token — fuente de dispatch única); `livekit.api` se importa **lazy** dentro del handler. Sirve
+  (`livekit.api.AccessToken`, SOLO para unirse; el dispatch del worker es AUTOMÁTICO del server cuando el
+  browser entra al room, no lo hace el token ni una llamada API); `livekit.api` se importa **lazy** dentro del handler. Sirve
   el vendor con MIME para `.mjs` (módulos ES). Watchdog que vuelve a idle si saga muere.
 - **`orb/orb.html`** — render Three.js del orbe (estados acoplados por bloom) **+ cliente LiveKit**
   (Ciclo 4): pide `/token`, se une al room (`Room.connect`), publica el mic muteado (desmutea en

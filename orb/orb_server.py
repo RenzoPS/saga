@@ -156,9 +156,9 @@ class Handler(BaseHTTPRequestHandler):
                 api.AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
                 .with_identity(identity)
                 .with_grants(api.VideoGrants(room_join=True, room=room))
-                # El token es SOLO para unirse al room. El dispatch del agente es ÚNICO y PROACTIVO:
-                # lo hace saga-ctl (_ensure_agent_dispatched, por API) al arrancar, ANTES del browser.
-                # (Antes el token traía además RoomConfiguration -> doble vía de dispatch; se sacó.)
+                # El token es SOLO para unirse al room. El dispatch del agente es AUTOMÁTICO nativo (U8):
+                # al unirse el browser, crea el room "saga" y el server despacha el worker solo. El token
+                # no despacha ni trae RoomConfiguration.
                 .to_jwt()
             )
         except Exception as e:  # noqa: BLE001 - degradar a 500 con causa

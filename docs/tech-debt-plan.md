@@ -11,6 +11,17 @@ código. Detectada durante el análisis del código.
 > el flujo clásico standalone** (`vc/app.py:_do_turn`, `whisper_daemon.py`, `vc/audio.py`/`stt.py`/`tts.py`,
 > env `VOICE_LIVEKIT`/`SAGA_TRANSPORT`/`VOICE_WAKE_ENABLED`/`VOICE_AUTOSTOP`). Esto **cerró D1 de raíz**:
 > ya no hay lógica de turno duplicada (`lk/claude_llm.py` es el único turn handler). Ver D1 abajo.
+>
+> **Actualización U8 (dispatch consistente).** El Win+Z `FileNotFoundError` intermitente ("coin-flip"
+> del dispatch) quedó **RESUELTO**. Causa raíz real: el worker corría en modo prod con `load_threshold=0.7`
+> y se auto-marcaba `unavailable` cuando la CPU local cruzaba 0.7 durante el arranque (load-shedding de
+> *pools* aplicado a un worker single-tenant) → el dispatch caía en esa ventana → 503. NO era un "server
+> envenenado" ni pestañas zombie. Fix (4 cambios nativos de livekit-agents 1.6): `load_fnc=0` (worker
+> siempre disponible) + dispatch AUTOMÁTICO (`@server.rtc_session()` sin `agent_name`, se eliminó
+> `_ensure_agent_dispatched()` de `vcctl.py` y `LIVEKIT_AGENT_NAME` de `vc/config.py`) + server/worker
+> relanzados frescos en cada `start` + `close_on_disconnect=False` (recargar la pestaña no mata el socket
+> de Win+Z). El viejo diagnóstico del "cold-start 503 / probe `list_dispatch` / retry de 90s" quedó
+> OBSOLETO (era erróneo).
 
 ## Resuelto por el Ciclo 4 (migración a modo room)
 
