@@ -5,7 +5,7 @@ Cómo prender, apagar, observar y diagnosticar saga. Para el detalle del stack L
 ## Ciclo de vida (`saga-ctl`)
 
 ```bash
-saga-ctl start      # levanta server nativo + Claude + orbe + worker + dispatch + browser + monitor
+saga-ctl start      # levanta server nativo + Claude + orbe + worker + browser + monitor
 saga-ctl status     # stack (Deepgram vs fallback), server, worker, daemons, readiness
 saga-ctl stop       # apaga todo (incluido el binario livekit-server) + limpia sockets/tmp
 saga-ctl restart    # stop + start
@@ -14,12 +14,13 @@ saga-ctl restart    # stop + start
 `saga-ctl` es `vcctl.py` (wrapper en `~/.local/bin/saga-ctl`). `start` levanta las piezas del modo room
 (único modo) en orden con readiness por pieza:
 
-1. `livekit-server` (binario nativo, `~/.local/bin/`) con `NODE_IP` auto-detectada y `LIVEKIT_KEYS` de `.env.local`.
-2. `claude_daemon` (cerebro caliente) — `prewarm_claude()`, dedup-safe.
-3. `orb_server` (orbe + endpoint `/token`) — `ensure_orb()`, dedup-safe.
-4. worker `lk/agent.py start` — se espera "registered worker" en el log ANTES de seguir.
-5. dispatch explícito del agente al room por API (`create_dispatch`, borra huérfanos + crea fresco).
-6. abre el browser cliente (`xdg-open` al orbe).
+1. `livekit-server` (binario nativo, `~/.local/bin/`) — relanzado FRESCO en cada `start` (rooms en memoria
+   reseteados, sin zombies), con `NODE_IP` auto-detectada y `LIVEKIT_KEYS` de `.env.local`.
+2. `claude_daemon` (cerebro caliente) — `prewarm_claude()`, dedup-safe (se reusa si ya corre).
+3. `orb_server` (orbe + endpoint `/token`) — `ensure_orb()`, dedup-safe (se reusa si ya corre).
+4. worker `lk/agent.py start` — relanzado fresco; se espera "registered worker" en el log ANTES de seguir.
+5. abre el browser cliente (`xdg-open` al orbe) — al unirse al room dispara el dispatch AUTOMÁTICO del worker.
+6. espera a que el socket de control `LK_CTL_SOCK` responda (readiness real del agente, ya despachado).
 
 Siempre con el venv del proyecto: `.venv/bin/python`.
 
@@ -88,9 +89,10 @@ Binarios requeridos: `claude` (crítico), `mpg123`/`pacat`/`paplay` (audio), `gr
   media a loopback).
 - **"worker NO arrancó" / no aparece "registered worker"** → mirá `livekit_agent.log` (crash de import de
   plugins, falta de deps en el venv, etc.).
-- **Win+Z falla con `FileNotFoundError` (socket de control)** → el agente no entró al room (dispatch huérfano
-  o pestaña zombie que creó el room antes del worker). `saga-ctl restart`: re-despacha (borra huérfanos + crea
-  fresco) y abre el browser después de que el agente ya esté en el room.
+- **Win+Z falla con `FileNotFoundError` (socket de control)** → el agente no entró al room. `saga-ctl restart`:
+  relanza el server y el worker frescos y espera a que el socket de control responda (agente ya despachado)
+  antes de dar el start por bueno. (El viejo "coin-flip" de este error lo resolvió U8: el worker ya no se
+  auto-marca `unavailable` bajo la carga de arranque, ver gotcha del dispatch automático.)
 - **Verificá el estado en una pasada**: `saga-ctl status` muestra stack, server (`:port UP/DOWN`),
   worker, daemons y readiness de sockets.
 - **Benchmark de latencia**: ver `aidlc-docs/construction/build-and-test/ciclo4-build-and-test.md`.
@@ -104,13 +106,16 @@ Binarios requeridos: `claude` (crítico), `mpg123`/`pacat`/`paplay` (audio), `gr
   usá SIGKILL o un proceso python aislado; mejor `saga-ctl stop`.
 - **El server es BINARIO NATIVO, no Docker.** Se baja con `saga-ctl stop` (mata `livekit-server` por basename),
   NO con `docker`. El NAT de Docker rompía el WebRTC local (dtls timeout) → por eso se sacó.
-- **Dispatch EXPLÍCITO, no auto.** El agente entra al room por `create_dispatch` que hace saga-ctl, no por
-  auto-dispatch. Si el socket de control falta (Win+Z `FileNotFoundError`), el agente no está en el room →
-  `saga-ctl restart` (re-despacha y limpia huérfanos).
+- **Dispatch AUTOMÁTICO, no por API (U8).** El worker corre con dispatch nativo (`@server.rtc_session()` sin
+  `agent_name`) y `load_fnc=0` → cuando el browser entra al room, el server despacha el worker solo. La causa
+  raíz del viejo Win+Z `FileNotFoundError` intermitente era el worker prod con `load_threshold=0.7`
+  marcándose `unavailable` bajo la carga de arranque (load-shedding de pools sobre un worker single-tenant),
+  no las pestañas zombie. Si el socket de control falta, `saga-ctl restart` (server + worker frescos).
 - **Plugins de LiveKit se importan a nivel módulo** en `lk/agent.py` (deben registrarse en el main
   thread; importarlos tarde crashea).
-- **Orquestación room**: `saga-ctl` pre-arranca server + Claude + orbe ANTES del worker (corre `entry()`
-  recién al despacharse). `prewarm_claude()`/`ensure_orb()` son dedup-safe → sin doble-spawn.
+- **Orquestación room**: `saga-ctl` pre-arranca server fresco + Claude + orbe ANTES del worker (corre `entry()`
+  recién al despacharse, cuando el browser entra al room). `prewarm_claude()`/`ensure_orb()` son dedup-safe →
+  sin doble-spawn. El wait del socket de control va DESPUÉS de abrir el browser (el browser es el trigger del dispatch).
 - **El stack lo decide la key**, no un flag. No agregar flags para elegir proveedor.
 - **`orb.html`: colores de fondo en sRGB** (`THREE.SRGBColorSpace`), sino el bloom revienta a blanco.
 - **Whisper `beam>=3`** (greedy/beam=1 dispara loops de alucinación).

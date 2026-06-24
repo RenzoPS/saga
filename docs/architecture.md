@@ -30,7 +30,7 @@ graph TD
     end
 
     OServer["orb/orb_server.py<br/>HTTP :8777 (SSE + /token)"]
-    Ctl["saga-ctl (vcctl.py)<br/>dispatch explicito"]
+    Ctl["saga-ctl (vcctl.py)<br/>orquestacion"]
     WinZ["Win+Z (Hyprland)"]
     CtlSock["LK_CTL_SOCK (unix)"]
     CDaemon["claude_daemon.py<br/>(claude caliente)"]
@@ -41,7 +41,7 @@ graph TD
     Room -->|publica TTS track| Orb
     Room <-->|track audio| Agent
     Orb -->|GET /token /state| OServer
-    Ctl -->|create_dispatch agent=saga| Room
+    Ctl -->|spawnea worker fresco| Worker
     WinZ -->|press| CtlSock
     OServer -->|/say /stage -> socket| CtlSock
     CtlSock -.-> Agent
@@ -82,25 +82,29 @@ local (faster-whisper + edge-tts) corre DENTRO del agente, sin daemons separados
   `udp_port: 7882` para media. `node_ip` se inyecta por env `NODE_IP` = IP de LAN auto-detectada por saga-ctl
   (`ip route`), porque LiveKit nunca bindea el UDP de media a loopback. Keys de `.env.local` (`LIVEKIT_KEYS`).
 - **Worker** (`lk/agent.py start`) — el cerebro. `AgentSession` dueña del audio/STT/TTS/VAD/turn detection.
-  Se registra como agente NOMBRADO (`@server.rtc_session(agent_name="saga")`, dispatch explícito). Default:
-  STT `deepgram.STT(nova-3, es)` + TTS `deepgram.TTS(aura-2-gloria-es)` + Silero VAD + turn detector semántico
-  (`MultilingualModel`, anti-chopping). LLM custom `lk/claude_llm.py` reenvía al `claude_daemon`. Socket de
-  control `LK_CTL_SOCK` (`press`=Win+Z, `say`=texto, `stage`=panel→memoria).
+  Server `AgentServer(load_fnc=lambda: 0.0, drain_timeout=0, num_idle_processes=1)` con **dispatch AUTOMÁTICO**
+  (`@server.rtc_session()` SIN `agent_name`): cuando el browser se une al room "saga", el server despacha el
+  worker solo → `entry()` → socket de control. Default: STT `deepgram.STT(nova-3, es)` + TTS
+  `deepgram.TTS(aura-2-gloria-es)` + Silero VAD + turn detector semántico (`MultilingualModel`, anti-chopping).
+  LLM custom `lk/claude_llm.py` reenvía al `claude_daemon`. Socket de control `LK_CTL_SOCK` (`press`=Win+Z,
+  `say`=texto, `stage`=panel→memoria).
 - **Cliente** (`orb/orb.html`) — browser con LiveKit JS SDK (vendoreado en `orb/vendor/livekit/`). Pide token a
-  `/token`, se une al room, publica el mic (muteado; desmutea en `rec` vía el estado SSE), se suscribe al track
-  TTS, lo reproduce y **anima el orbe con el nivel real de la voz** (Web Audio AnalyserNode).
-- **Token + dispatch** — `orb/orb_server.py` `/token` mintea el JWT del cliente (`livekit.api.AccessToken`).
-  saga-ctl hace `AgentDispatchService.create_dispatch(agent_name=saga, room=saga)` al arrancar → el agente entra
-  al room ANTES que el browser (robusto contra timing y pestañas zombie).
+  `/token`, se une al room (esto CREA el room y dispara el dispatch automático del worker), publica el mic
+  (muteado; desmutea en `rec` vía el estado SSE), se suscribe al track TTS, lo reproduce y **anima el orbe con
+  el nivel real de la voz** (Web Audio AnalyserNode).
+- **Token** — `orb/orb_server.py` `/token` mintea el JWT del cliente (`livekit.api.AccessToken`). Solo sirve
+  para unirse al room; NO despacha (el dispatch es automático del server cuando el browser entra).
 - **Orquestación** (`vcctl.py` = `saga-ctl`, `_start_room()`) — levanta en orden con readiness por pieza:
-  server nativo → `claude_daemon` → orbe → worker → dispatch → browser. `stop` baja todo (incluido el binario,
-  match por basename, sin tocar esta sesión de claude).
+  server fresco → `claude_daemon` (dedup) → orbe (dedup) → worker fresco (espera "registered worker") → browser
+  (trigger del dispatch) → espera a que el socket de control `LK_CTL_SOCK` responda (readiness real del agente).
+  `stop` baja todo (incluido el binario, match por basename, sin tocar esta sesión de claude).
 
 ## Componentes y responsabilidades
 
 - **`livekit-server`** — server WebRTC nativo: hostea el room, enruta los tracks de audio entre cliente y worker.
-- **`lk/agent.py`** — worker LiveKit: arma el `AgentSession` (STT+VAD+turn+LLM+TTS), socket de control, agente
-  nombrado para dispatch explícito. Levanta el orbe y precalienta Claude (dedup-safe).
+- **`lk/agent.py`** — worker LiveKit: arma el `AgentServer` (dispatch automático, `load_fnc=0`,
+  `num_idle_processes=1`, `drain_timeout=0`) + el `AgentSession` (STT+VAD+turn+LLM+TTS) y el socket de control.
+  Levanta el orbe y precalienta Claude (dedup-safe).
 - **`lk/claude_llm.py`** — el turn handler real: toma el último turno, engancha comandos de voz
   (reset, visión), consume adjuntos, delega en `claude_daemon`.
 - **`lk/whisper_stt.py` + `lk/edge_tts_plugin.py`** — adaptadores STT/TTS de fallback local (faster-whisper +
@@ -128,8 +132,11 @@ local (faster-whisper + edge-tts) corre DENTRO del agente, sin daemons separados
 - **Server nativo, no Docker**: el NAT de Docker sobre localhost rompe el WebRTC (`dtls timeout`); el binario
   nativo evita el problema. El modo room además descarta los frames con el track detached cuando el mic está
   apagado (mecanismo nativo `room_io/_input.py`) → sin backlog de audio.
-- **Dispatch explícito**: el worker no auto-despacha; saga-ctl crea el dispatch al arrancar → el agente entra al
-  room antes que el browser (sin `FileNotFoundError` por pestañas zombie).
+- **Dispatch automático** (U8): el worker corre con dispatch nativo (`@server.rtc_session()` sin `agent_name`) +
+  `load_fnc=0` (nunca se auto-marca `unavailable`). Cuando el browser entra al room, el server despacha el
+  worker solo. Esto resolvió el "coin-flip" del Win+Z `FileNotFoundError`: la causa raíz era el worker prod con
+  `load_threshold=0.7` marcándose `unavailable` bajo la carga de arranque (load-shedding de pools aplicado a un
+  worker single-tenant), no las pestañas zombie. Server fresco en cada `start` = sin rooms zombie en memoria.
 - **Degradación elegante**: Deepgram→whisper/edge (dentro del agente); daemon→one-shot; guard fail-open.
   Nunca queda mudo.
 - **Daemons calientes**: matan el cold-start por turno (modelo/plugins/sesión en RAM).
