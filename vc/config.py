@@ -9,6 +9,17 @@ HOME = Path.home()
 PROJECT_DIR = HOME / ".local/share/saga"
 LOG_FILE = PROJECT_DIR / "saga.log"
 
+# .env.local (secretos + overrides de config) se carga ACÁ, al TOP, ANTES de leer cualquier env -> así
+# TODAS las VOICE_*/LIVEKIT_* se pueden setear en el archivo (no solo inline). load_dotenv es idempotente y
+# NO pisa env ya seteadas: el inline (ej. `CLAUDE_PLUGINS=1 saga-ctl ...`) sigue ganando. Degrada en
+# silencio si falta dotenv. (Lo lee cualquier importador de config: agente, orb_server /token, vcctl.)
+ENV_FILE = PROJECT_DIR / ".env.local"
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv(ENV_FILE)
+except Exception:
+    pass
+
 EDGE_VOICE = "es-AR-ElenaNeural"  # Microsoft Edge TTS, voz argentina femenina
 EDGE_RATE = "+5%"  # ligeramente mas rapida
 EDGE_PITCH = "+0Hz"
@@ -60,28 +71,67 @@ def _detect_claude_mem_dir() -> "str | None":
 
 CLAUDE_MEM_DIR = _detect_claude_mem_dir()
 
-# Red de seguridad: hook PreToolUse que bloquea comandos Bash catastróficos antes
-# de ejecutarse (god-mode + voz -> un mishear no puede borrar el disco). Los hooks
-# corren aún con --dangerously-skip-permissions. Se inyecta vía --settings (aditivo,
-# no reactiva las setting-sources). Ver vc/guard.py.
+# --- Settings aditivos del daemon de voz (vía --settings, per-sesión, NO toca la config global) ---
+# Llevan DOS cosas: (1) el guard (hook PreToolUse anti-Bash-catastrófico: god-mode + voz -> un mishear
+# no puede borrar el disco; corre aún con --dangerously-skip-permissions); (2) los plugins que saga apaga.
 GUARD_SCRIPT = PROJECT_DIR / "vc" / "guard.py"
-GUARD_SETTINGS = PROJECT_DIR / ".guard-settings.json"
+SAGA_SETTINGS = PROJECT_DIR / ".saga-settings.json"
+
+# Ciclo 5 — carga de plugins en el daemon de voz (spike agéntico).
+# Master switch por env CLAUDE_PLUGINS (solo prende/apaga, NO lleva listas):
+#   "0" / unset (DEFAULT)  -> claude a secas: --setting-sources '' + --disable-slash-commands (sin plugins)
+#   "1" / "on"             -> carga los plugins (cada uno = mcp + skills + hooks + slash), MENOS la blacklist
+# NO es "full": la blacklist recorta, así que nunca es el stack entero -> el nombre es el toggle honesto.
+# Qué plugins NO levantar = BLACKLIST en archivo JSON editable (configs/plugins-blacklist.json):
+#   {"disabledPlugins": ["name@marketplace", ...]}  (el id que muestra `claude plugin list`).
+# NO hardcode: el código es agnóstico, la lista es config del usuario y escala a N. Cada plugin de la blacklist
+# se apaga ENTERO (mcp+skills+hooks+slash) vía enabledPlugins:false en --settings, SOLO para el daemon de saga
+# (NO toca ~/.claude/settings.json). VERIFICADO: enabledPlugins:false saca el plugin de `claude mcp list`.
+# El daemon hereda el env (prewarm_claude env={**os.environ}); por eso vcctl/daemon NO se tocan.
+PLUGINS_BLACKLIST = PROJECT_DIR / "configs" / "plugins-blacklist.json"
 
 
-def _ensure_guard_settings() -> "str | None":
+def _read_plugins_blacklist() -> list:
+    """Lee la blacklist JSON {"disabledPlugins": [...]}. Esos plugins NO se levantan con CLAUDE_PLUGINS=1.
+    Config editable, no hardcode. Degrada a [] si el archivo falta o el JSON es inválido (no rompe el arranque)."""
     try:
-        GUARD_SETTINGS.write_text(json.dumps({"hooks": {"PreToolUse": [
-            {"matcher": "Bash", "hooks": [
-                {"type": "command", "command": f"python3 {GUARD_SCRIPT}"}]}]}}))
-        return str(GUARD_SETTINGS)
+        data = json.loads(PLUGINS_BLACKLIST.read_text())
+    except (OSError, ValueError):
+        return []
+    items = data.get("disabledPlugins", []) if isinstance(data, dict) else []
+    return [s.strip() for s in items if isinstance(s, str) and s.strip()]
+
+
+DISABLED_PLUGINS = _read_plugins_blacklist()
+
+_PLUGINS_ENV = os.environ.get("CLAUDE_PLUGINS", "0").strip().lower()
+PLUGINS_MODE = "on" if _PLUGINS_ENV in ("1", "on", "true", "yes") else "off"
+
+
+def _ensure_saga_settings() -> "str | None":
+    """Escribe el settings aditivo del daemon: guard (hook) + enabledPlugins:false para los plugins
+    que saga apaga. Aislado del global. Degrada a None si no se puede escribir."""
+    settings = {"hooks": {"PreToolUse": [
+        {"matcher": "Bash", "hooks": [
+            {"type": "command", "command": f"python3 {GUARD_SCRIPT}"}]}]}}
+    if DISABLED_PLUGINS:
+        settings["enabledPlugins"] = {p: False for p in DISABLED_PLUGINS}
+    try:
+        SAGA_SETTINGS.write_text(json.dumps(settings))
+        return str(SAGA_SETTINGS)
     except OSError:
-        return None  # degradación: sin guard pero el asistente sigue andando
+        return None  # degradación: sin guard/plugins-off pero el asistente sigue andando
 
 
-_GUARD = _ensure_guard_settings()
-CLAUDE_FAST_FLAGS = ["--setting-sources", "", "--disable-slash-commands"]
-if _GUARD:
-    CLAUDE_FAST_FLAGS = ["--settings", _GUARD] + CLAUDE_FAST_FLAGS
+_SAGA_SETTINGS = _ensure_saga_settings()
+
+if PLUGINS_MODE == "on":
+    CLAUDE_FAST_FLAGS = []                       # sin strip -> carga los plugins (menos los apagados)
+else:
+    CLAUDE_FAST_FLAGS = ["--setting-sources", "", "--disable-slash-commands"]
+
+if _SAGA_SETTINGS:
+    CLAUDE_FAST_FLAGS = ["--settings", _SAGA_SETTINGS] + CLAUDE_FAST_FLAGS
 # claude-mem en el daemon de voz: recall + captura por turno. PROBADO en vivo: el
 # hook de recall (antes de responder) infla el TTFT de ~2s a 4-7s -> demasiado para
 # voz. Default OFF (la velocidad gana). El transcript queda en saga.log, así
@@ -146,19 +196,7 @@ LK_LOG = PROJECT_DIR / "livekit_agent.log"
 # (push-to-talk). Lo crea y escucha el proceso del agente.
 LK_CTL_SOCK = Path("/tmp/saga-lk-ctl.sock")
 
-# Secretos del proyecto (API keys). Archivo gitignored, cargado por el agente con
-# python-dotenv. NO es config seteable: el STT/TTS los decide el código (Deepgram por
-# default; si no hay key, cae solo a whisper/edge). Acá solo vive el secreto.
-ENV_FILE = PROJECT_DIR / ".env.local"
-
-# Cargamos .env.local acá (no solo en el agente) para que CUALQUIER importador de config
-# —incluido orb_server, que mintea el JWT en /token— vea LIVEKIT_API_KEY/SECRET y demás.
-# load_dotenv es idempotente y no pisa env ya seteadas; si falta dotenv, se degrada en silencio.
-try:
-    from dotenv import load_dotenv as _load_dotenv
-    _load_dotenv(ENV_FILE)
-except Exception:
-    pass
+# (.env.local ya se cargó al TOP del módulo —ver arriba—; acá viven los secretos: API keys, gitignored.)
 
 # Transporte room (Ciclo 4). El worker (lk/agent.py) y el token endpoint (orb_server) leen
 # de acá. URL/room tienen default local; las keys viven SOLO en .env.local (secreto). El

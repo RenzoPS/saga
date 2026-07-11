@@ -24,7 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from vc.config import (
     CLAUDE_SOCK, CLAUDE_DAEMON_IDLE_S, CLAUDE_DAEMON_TURN_TIMEOUT_S, LOG_FILE,
-    build_claude_base_args,
+    build_claude_base_args, PLUGINS_MODE, DISABLED_PLUGINS,
 )
 from vc.session import get_active_session_id, reset_session
 
@@ -65,7 +65,8 @@ class ClaudeProc:
             start_new_session=True,   # grupo propio -> al matar, matamos TODO el árbol (subspawns de claude-mem incluidos)
         )
         self._session_flag = flag
-        log(f"claude spawned ({flag} {sid[:8]}…) en {time.monotonic()-t0:.1f}s")
+        _off = f", off={','.join(p.split('@')[0] for p in DISABLED_PLUGINS)}" if DISABLED_PLUGINS else ""
+        log(f"claude spawned ({flag} {sid[:8]}…, plugins={PLUGINS_MODE}{_off}) en {time.monotonic()-t0:.1f}s")
 
     def alive(self) -> bool:
         return self.p is not None and self.p.poll() is None

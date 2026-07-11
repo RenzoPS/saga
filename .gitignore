@@ -13,12 +13,15 @@ saga.log*
 livekit_agent.log*
 livekit_server.log*
 session.json
-.guard-settings.json
+.saga-settings.json
 *.wav
 
 # secretos: API keys (Deepgram, etc). NUNCA se commitea.
 .env
 .env.local
+
+# blacklist de plugins del daemon: lista personal, local. Va la plantilla .example al repo.
+configs/plugins-blacklist.json
 
 # todo lo de Claude (CLAUDE.md + superpowers): local, NO se commitea
 .claude/

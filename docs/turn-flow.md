@@ -42,7 +42,7 @@ sequenceDiagram
     U->>B: habla
     B->>A: track de audio
     Note over A,TD: fin de turno por SILENCIO (VAD silero)<br/>min_delay 3.0s, o 2do Win+Z
-    A->>O: state=think  (arma watchdog _busy 18s)
+    A->>O: state=think  (arma watchdog _busy 60s)
     A->>DG: audio -> texto
     DG-->>A: transcript
     A->>L: chat(last_user_text)
@@ -87,9 +87,11 @@ cuando se pasa `turn_handling`:
   apenas el VAD detecta que empezaste a hablar (`user_state=speaking`) o cuando el turno
   arranca (`agent_state=thinking`). Si vence en `rec` sin que hayas hablado → vuelve a
   idle con orbe `error` (amarillo "no te entendí").
-- **Watchdog `_busy` (18s)** — se ARMA al entrar a procesar (`thinking`). Si el turno
+- **Watchdog `_busy` (60s)** — se ARMA al entrar a procesar (`thinking`). Si el turno
   queda colgado en `busy` sin llegar a hablar (LLM/daemon trabado, transcript que no
-  llega) → destraba a idle con `error`. Se cancela al llegar a `speaking`.
+  llega) → destraba a idle con `error`. Se cancela al llegar a `speaking`. (Era 18s; subido
+  en Ciclo 5: con tool/MCP los turnos tardan 13-17s+ y 18s los mataba en falso. Es red de
+  seguridad para cuelgues REALES, no presupuesto de latencia.)
 - **Rapid Win+Z sin hablar** — cortar (`rec` → Win+Z) cuando el timer 'no hablaste' sigue
   armado significa turno VACÍO: no se manda nada, orbe `error` al toque (evita el cuelgue
   de comitear un turno sin transcript).
