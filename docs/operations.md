@@ -65,6 +65,7 @@ tail -F saga.log
 |-----|---------|----------|
 | `VOICE_CLAUDE_SAFE` | (off) | `=1` desactiva `--dangerously-skip-permissions` |
 | `VOICE_CLAUDE_MEM` | `0` | `=1` activa claude-mem en voz (+2-7s/turno; respawnear daemon) |
+| `CLAUDE_PLUGINS` | `0` | `=1` carga plugins de Claude en el daemon (MCP+skills+hooks+slash), menos `configs/plugins-blacklist.json`; off = claude pelado (más rápido) |
 | `SAGA_WAKE_ENABLED` | `0` | `=1` activa el wake "hey saga" server-side en el agente |
 | `ORB_PORT` | `8777` | puerto del server del orbe |
 

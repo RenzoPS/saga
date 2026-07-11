@@ -13,7 +13,7 @@ dentro del agente.
 
 ```
 Win+Z → browser publica el mic → server LiveKit local (WebRTC)
-        → worker: LiveKit (streaming, VAD, turn semántico, barge-in)
+        → worker: LiveKit (streaming, VAD, fin de turno por silencio, barge-in)
         → Deepgram Nova-3 (STT streaming)
         → Claude Code (daemon caliente, el cerebro: responde y hace cosas en la compu)
         → Deepgram Aura-2 (TTS, voz es. gloria)
@@ -138,7 +138,7 @@ el browser se une al room; saga-ctl espera a que el socket de control del agente
 |-------|-----------|-------|
 | Transporte | **server LiveKit nativo** (room, local) ↔ browser cliente ↔ worker | default; sin Docker |
 | Runtime audio | **LiveKit Agents** (worker `lk/agent.py start`) | captura/stream/VAD/turn/barge-in |
-| Turn detection | **MultilingualModel** (EOU semántico) + Silero VAD | anti-chopping de turnos |
+| Turn detection | **Silero VAD** (`turn_detection="vad"`, fin de turno por silencio) | antes MultilingualModel semántico; U10 → VAD puro (−1.8 GB RAM) |
 | STT | **Deepgram Nova-3** (streaming) | fallback: faster-whisper local |
 | Cerebro | **Claude Code** (`claude_daemon`, stream-json) | ejecuta tools/bash/MCP |
 | TTS | **Deepgram Aura-2** (voz `aura-2-gloria-es`) | fallback: edge-tts |
@@ -160,6 +160,7 @@ Toggles:
 | `SAGA_WAKE_ENABLED` | `0` (off) | `=1` activa el wake "hey saga" en el server (sobre el track del mic) |
 | `VOICE_CLAUDE_SAFE` | (off) | `=1` desactiva `--dangerously-skip-permissions` |
 | `VOICE_CLAUDE_MEM` | `0` (off) | `=1` activa claude-mem en voz (+2-7s/turno; respawnear daemon) |
+| `CLAUDE_PLUGINS` | `0` (off) | `=1` carga los plugins de Claude en el daemon de voz (MCP+skills+hooks+slash), menos los de `configs/plugins-blacklist.json`. Off = claude pelado (más rápido). Spike agéntico |
 | `ORB_PORT` | `8777` | puerto del server del orbe |
 
 El stack STT/TTS NO es un toggle: lo decide la presencia de `DEEPGRAM_API_KEY` (Deepgram) o su

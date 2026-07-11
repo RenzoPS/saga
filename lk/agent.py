@@ -203,7 +203,10 @@ async def entry(ctx: "agents.JobContext") -> None:
     # Watchdog de seguridad: si el turno queda colgado en 'busy' (thinking) SIN llegar a hablar
     # (LLM/daemon trabado, transcript que nunca llega, etc.), destraba a idle con 'no te entendí'
     # en vez de quedar pegado. Se arma al entrar a procesar, se cancela al hablar o resolver.
-    _PROC_TIMEOUT = 18.0
+    # 60s: con el stack agéntico (Ciclo 5) los turnos con tool/MCP tardan 13-17s+ (tool-defs en contexto +
+    # round-trips); 18s los mataba en falso. Es red de seguridad para cuelgues REALES, no presupuesto de
+    # latencia. El daemon tiene su propio techo (CLAUDE_DAEMON_TURN_TIMEOUT_S=180s) que corta después.
+    _PROC_TIMEOUT = 60.0
     _busy = {"h": None}
 
     def _cancel_busy() -> None:

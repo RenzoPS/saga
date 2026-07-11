@@ -130,9 +130,12 @@ pesadas a Claude). No es deuda nueva del Ciclo 4; es el techo de latencia conoci
 
 ## Ciclos futuros (decisiones de producto, no deuda)
 
-- **Ciclo 5 — saga agéntico**: darle "manos" (tools/MCPs). Primer paso ya dado en Ciclo 4 (prompt que
-  habilita el Bash built-in). Habilitar más tools/MCPs es viable con el `claude_daemon` caliente (el
-  cold-start que motivó el `--setting-sources ''` se paga una vez al arranque, no por turno).
+- **Ciclo 5 — saga agéntico** (ARRANCADO, spike): darle "manos" (tools/MCPs). Primer paso ya dado en
+  Ciclo 4 (prompt que habilita el Bash built-in). El spike agregó el toggle `CLAUDE_PLUGINS=1`: carga los
+  plugins de Claude (MCP+skills+hooks+slash) en el `claude_daemon` caliente, menos una blacklist editable
+  (`configs/plugins-blacklist.json`, aislada en `.saga-settings.json` sin tocar `~/.claude`). Default OFF
+  (claude pelado = más rápido). Costo medido: los turnos con tool/MCP tardan 13-17s+ (tool-defs en contexto +
+  round-trips) → el watchdog `_busy` subió a 60s. La latencia agéntica es cuestión de Claude, no del harness.
 - **Ciclo 6 — speaker verification** ("solo mi voz"): DIFERIDO. No arrancado.
 
 ## Criterio transversal

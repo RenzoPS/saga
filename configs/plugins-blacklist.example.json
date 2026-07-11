@@ -1,0 +1,7 @@
+{
+  "_comment": "Plantilla. Copiá este archivo a plugins-blacklist.json y poné tu lista. Solo aplica con CLAUDE_PLUGINS=1: estos plugins NO se levantan en el daemon de voz (enabledPlugins:false, aislado del ~/.claude global). Usá el id que muestra `claude plugin list` -> name@marketplace. El _comment se ignora.",
+  "disabledPlugins": [
+    "playwright@claude-plugins-official",
+    "nombre-plugin@su-marketplace"
+  ]
+}

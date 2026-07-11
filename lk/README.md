@@ -59,7 +59,7 @@ el server del socket corre en el MISMO loop que la sesión → llama la API de L
 ### Timers PROPIOS (no internals privados)
 Implementados con `asyncio.call_later` (herramientas estándar), reemplazan los timeouts nativos:
 - **away** (`_NO_SPEECH_TIMEOUT` 6s): se arma al abrir el mic (rec) y se cancela apenas el VAD detecta voz. Si vence sin hablar → vuelve a idle con orbe **amarillo "no te entendí"** (empty-cut, no el rojo de cancel).
-- **busy/watchdog** (`_PROC_TIMEOUT` 18s): se arma al entrar a procesar; si el turno queda colgado en `thinking` sin llegar a `speaking`, destraba a idle con "no te entendí".
+- **busy/watchdog** (`_PROC_TIMEOUT` 60s): se arma al entrar a procesar; si el turno queda colgado en `thinking` sin llegar a `speaking`, destraba a idle con "no te entendí". (Era 18s; subido en Ciclo 5 porque los turnos con tool/MCP tardan 13-17s+ y 18s los mataba en falso.)
 
 ## Otros endpoints del panel (orb_server → socket)
 - `say` (Shift+Enter): prompt por TEXTO → `session.generate_reply(user_input=…)` → mismo LLM+TTS, sin grabar voz.

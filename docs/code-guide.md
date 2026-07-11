@@ -47,7 +47,8 @@ son densos y confiables** — leelos en el archivo.
   las 3 fases de Win+Z (`_press`), el prompt por texto (`_say`), el socket de control
   (`press`/`stage`/`say`), y los handlers de estado `_on_agent_state`/`_on_user_state`. **Timers
   propios** (`asyncio.call_later`, sin internals): `_arm_away` (6s "abriste el mic y no hablaste",
-  VAD-aware) y `_arm_busy` (18s watchdog de turno colgado en thinking). BVC (noise cancellation) NO
+  VAD-aware) y `_arm_busy` (60s watchdog de turno colgado en thinking; era 18s, subido en
+  Ciclo 5 porque los turnos con tool/MCP tardan 13-17s+). BVC (noise cancellation) NO
   se usa: requiere LiveKit Cloud → falla en el server self-hosted; room se apoya en el VAD Silero.
   Además levanta orbe + precalienta Claude (dedup-safe). Plugins LiveKit importados a **nivel
   módulo** (deben registrarse en el main thread).
@@ -68,7 +69,10 @@ son densos y confiables** — leelos en el archivo.
   keys. Constantes del modo room (Ciclo 4): `LIVEKIT_URL/API_KEY/API_SECRET/ROOM`,
   `LIVEKIT_SERVER_BIN`/`LIVEKIT_CONFIG`/`LK_SERVER_LOG`, `LIVEKIT_SIGNAL_PORT` (7880). (La constante
   `LIVEKIT_AGENT_NAME` se ELIMINÓ en U8: el dispatch es automático, sin agente nombrado.) Las keys solo
-  viven en `.env.local`; URL/room tienen default local. Sin lógica.
+  viven en `.env.local`; URL/room tienen default local. **Toggle de plugins (Ciclo 5)**: `CLAUDE_PLUGINS`
+  decide los flags del daemon — off (default) = claude pelado (`--setting-sources '' --disable-slash-commands`);
+  on = carga los plugins menos la blacklist (`configs/plugins-blacklist.json` → `enabledPlugins:false` por plugin,
+  aislado en `.saga-settings.json`, sin tocar `~/.claude`).
 - **`vc/claudecli.py`** — cliente de Claude con dos caminos: daemon (rápido) + fallback one-shot
   (`claude -p`). Maneja imagen (multimodal por stdin), reintento de sesión, y respeta el flag global
   de cancelación.
@@ -82,6 +86,8 @@ son densos y confiables** — leelos en el archivo.
   `starttime` de `/proc` para que un PID reciclado no se haga pasar por el dueño).
 - **`vc/guard.py`** — hook **PreToolUse** de Claude: denylist de bash catastrófico (rm -rf, dd,
   mkfs, fork bomb, git reset --hard, sobrescribir dotfiles…). Fail-open. Función pura `denied()` testeable.
+  Se inyecta vía `.saga-settings.json` (settings aditivo per-sesión del daemon, que además lleva el
+  `enabledPlugins:false` de la blacklist cuando `CLAUDE_PLUGINS=1`).
 - **`vc/sound.py`** — beep de notificación (genera WAV de dos tonos, lo reproduce con `paplay`).
 - **`vc/orb.py`** — cliente del orbe: levanta el server si hace falta y manda el **estado** por HTTP
   no bloqueante (cola + keep-alive). No manda nivel de audio: el orbe late con el track TTS vía Web
