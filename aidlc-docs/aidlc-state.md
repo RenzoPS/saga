@@ -4,11 +4,11 @@
 - **Project Type**: Brownfield
 - **Project Name**: saga
 - **Start Date**: 2026-06-21T22:49:10Z
-- **Current Phase**: **Doc-sync 2026-07-12 — CERRADO.** Documentación de todo el proyecto sincronizada con
-  el código actual (HEAD 57399b3, U11). Ciclos 4/5/7 CERRADOS y en main.
-- **Current Stage**: Idle. RE refresh CERRADO (8/8 artefactos + auditoría de consistencia docs/ vs código).
-  `docs/` verificado (2 drift menores fijados en tech-debt-plan). Pendientes previos sin cambio: commit del
-  código Ciclo 5 (no pedido aún) + meditar qué plugins útiles. Bug TTS agéntico abierto (documentado).
+- **Current Phase**: **Ciclo 8 — Limpieza de deuda técnica (INCEPTION).** Doc-sync 2026-07-12 CERRADO y
+  en main (commits 342fb2b docs + f269a5d framework). Ciclos 4/5/7 CERRADOS y en main.
+- **Current Stage**: Ciclo 8 CONSTRUCTION CERRADA (código + Build&Test estático verde) en rama
+  `feat/ciclo8-cleanup-deuda`. Q1=A/Q2=A (delegado al AI). **Pendiente: commit/push (OK del usuario).**
+  Pendientes previos sin cambio: meditar qué plugins útiles; bug TTS agéntico abierto (fuera de scope).
 - **Última actualización de docs del repo**: U11 (commit 57399b3) sincronizó `docs/` + README. El toggle hoy es
   `CLAUDE_PLUGINS` (antes `VOICE_FULL_STACK`, renombrado en U11).
 
@@ -35,6 +35,26 @@
     predicting end of turn". El turn detector era el 78% de la RAM (único consumidor grande).
   > **Ciclo 7 cerrado por ahora** (U9 CPU + U10 RAM). Worker pasó de ~410%/2.6 GB a ~40%/0.9 GB.
   > Próximo salto de hardware chico: split Pi (browser/mic vs worker) + onnxruntime-web para el wake (futuro).
+- **Ciclo 8 (NUEVO) — Limpieza de deuda técnica**: cleanup brownfield, sin lógica nueva, sin tocar el flujo
+  de voz. CORE: FR1 (cadena muerta cancel SIGUSR2 en vc/runtime.py + no-ops en claudecli) + FR2 (deps muertas
+  turn-detector/noise-cancellation en pyproject). Optativos a decidir: wake shutdown, pin LiveKit, lint/CI.
+  Requirements: inception/requirements/ciclo8-cleanup-requirements.md.
+
+### INCEPTION Ciclo 8
+- [x] Workspace Detection — RESUME (brownfield)
+- [x] Reverse Engineering — SKIP (refresh 2026-07-12 vigente)
+- [x] Requirements Analysis — COMPLETO (ciclo8-cleanup-requirements.md; Q1=A CORE, Q2=A solo pyproject, delegado al AI)
+- [x] User Stories — SKIP (cleanup interno, cero impacto al usuario)
+- [x] Workflow Planning — COMPLETO (execution-plan-ciclo8.md)
+- [x] Application Design / Units Generation — SKIP (sin componentes/descomposición)
+
+### CONSTRUCTION Ciclo 8
+- [x] Functional / NFR Req / NFR Design / Infra Design — SKIP (sin lógica/modelos/infra nuevos)
+- [x] Code Generation — Part 1 (ciclo8-cleanup-code-generation-plan.md) + Part 2 (código) HECHOS.
+  3 archivos: vc/runtime.py (rewrite, saca cadena muerta), vc/claudecli.py (no-ops + de-indent),
+  pyproject.toml (2 deps muertas). Summary: construction/ciclo8-cleanup/code/generation-summary.md.
+- [x] Build & Test — CERRADO OK (estático). py_compile + tests 11/11 + import smoke + refs=0 + _cancel vivo.
+  Detalle: construction/build-and-test/ciclo8-build-and-test.md. **Pendiente: commit/push (OK del usuario).**
 
 ## Ciclo 4 — Migración modo console → modo room (LiveKit)
 - **Tipo**: migration/refactor del TRANSPORTE de audio. El cerebro IA (STT/LLM/TTS/VAD/wake) se conserva.
@@ -598,6 +618,10 @@ ACAV) queda entrenado y listo; el blocker para activarlo es el bug del buffer, N
 > Notas: las tres se saltan como gate bloqueante (scope = documentación + plan, sin código nuevo).
 > Security y PBT-partial quedan cubiertos como *recomendaciones* en el plan de remediación.
 > Reglas completas de extensiones NO cargadas (todas opt-out).
+> **Ciclo 8 (2026-07-12): re-confirmado por opt-in explícito** (delegado al AI) → Security=B(No),
+> Resiliency=B(No), PBT=C(No). Justificación en ciclo8-cleanup-requirements.md: el ciclo BORRA código
+> muerto, sin superficie de red/auth/secretos ni funciones puras/serialización nuevas. Compliance
+> summary del ciclo: las 3 = **N/A** (no aplican al cleanup), no bloquean.
 
 ## Stage Progress
 
