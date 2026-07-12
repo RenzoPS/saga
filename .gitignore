@@ -23,12 +23,13 @@ session.json
 # blacklist de plugins del daemon: lista personal, local. Va la plantilla .example al repo.
 configs/plugins-blacklist.json
 
-# todo lo de Claude (CLAUDE.md + superpowers): local, NO se commitea
+# .claude/ (superpowers + config local): NO se commitea. El CLAUDE.md de raíz (workflow AI-DLC) SÍ.
 .claude/
 docs/superpowers/
 
-# artefactos del proceso AI-DLC: bitácora/contexto local, NO se commitea (docs/ sí va al repo)
-aidlc-docs/
+# Framework AI-DLC VERSIONADO en el repo (self-contained): workflow CLAUDE.md (raíz) + reglas
+# .aidlc-rule-details/ + bitácora/estado/artefactos aidlc-docs/. Los secretos y el runtime siguen
+# ignorados arriba (.env*, session.json, .saga-settings.json, configs/plugins-blacklist.json, logs).
 
 # temporales del sistema
 /tmp/
