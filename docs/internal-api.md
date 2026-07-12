@@ -117,8 +117,5 @@ Escritura atómica (tmp + `os.replace`). Si está corrupto, rota a uuid nueva.
 ```
 `content` es array para multimodal (imagen base64 PNG + texto).
 
-### `word_aliases.json` (opcional, editable)
-Dict `palabra → fonetización`, aplicado en `clean_for_tts`.
-
 ### Estado del orbe
 Un string de `VALID_STATES` (ver tabla arriba).

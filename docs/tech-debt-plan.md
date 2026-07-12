@@ -44,8 +44,8 @@ por el usuario, 10/10). Referencia: `aidlc-docs/construction/build-and-test/cicl
 | P3 | Ruido de fondo: **BVC es Cloud-only**; en self-hosted no se usa (room se apoya en VAD Silero) | `lk/agent.py` | Baja (evaluar) |
 | D2 | Sin lint / typecheck / CI | repo | Media |
 | D3 | LiveKit **sin pin** en `pyproject.toml` | `pyproject.toml` | Media |
-| D4 | `is_goodbye` huérfana (código muerto testeado) | `vc/session.py` + `tests/test_pure.py` | Baja |
-| D5 | `import os` duplicado | `vc/app.py` (líneas 4 y 9) | Trivial |
+| D4 | `is_goodbye` huérfana (código muerto testeado) | `vc/session.py` + `tests/test_pure.py` | ✅ Resuelta (removida) |
+| D5 | `import os` duplicado | `vc/app.py` | ✅ Resuelta (U7 reescribió `vc/app.py`) |
 | R1 | Hardening de seguridad puntual (recomendación) | god-mode, sockets, secretos | Media |
 | R2 | Adoptar **PBT-partial** (Hypothesis) (recomendación) | funciones puras | Baja-media |
 
@@ -53,14 +53,13 @@ por el usuario, 10/10). Referencia: `aidlc-docs/construction/build-and-test/cicl
 
 Orden sugerido por relación impacto/esfuerzo/riesgo. Todo es reversible y de bajo riesgo.
 
-### 1. D5 — `import os` duplicado (quick win)
-- **Impacto**: cosmético. **Esfuerzo**: minutos. **Riesgo**: nulo.
-- **Acción**: borrar la segunda línea `import os` en `vc/app.py`.
+### 1. D5 — `import os` duplicado — ✅ RESUELTA
+- **Resolución**: el refactor U7 reescribió `vc/app.py` (hoy 40 líneas, emisor del `press` + `--doctor`);
+  ya no contiene ningún `import os`. La deuda desapareció con la reescritura, no requiere acción.
 
-### 2. D4 — `is_goodbye` huérfana
-- **Impacto**: claridad (qué está activo). **Esfuerzo**: bajo. **Riesgo**: bajo.
-- **Acción**: decidir — (a) borrar `is_goodbye` + sus tests si el modo conversacional no vuelve, o
-  (b) dejar un comentario marcándola como reservada para uso futuro. Evitar el limbo actual.
+### 2. D4 — `is_goodbye` huérfana — ✅ RESUELTA
+- **Resolución**: `is_goodbye` y sus tests fueron eliminados (`rg is_goodbye vc/ tests/` = 0). Ya no
+  hay código muerto que decidir; el limbo se cerró.
 
 ### 3. D3 — Pin de LiveKit
 - **Impacto**: reproducibilidad / evitar romper en upgrades. **Esfuerzo**: bajo. **Riesgo**: bajo.
@@ -76,10 +75,9 @@ Orden sugerido por relación impacto/esfuerzo/riesgo. Todo es reversible y de ba
 ### 5. R2 — PBT-partial (Hypothesis)
 - **Impacto**: tests más fuertes sobre la lógica de decisión. **Esfuerzo**: medio. **Riesgo**: bajo.
 - **Acción**: agregar `hypothesis` y propiedades sobre funciones puras, por ejemplo:
-  - `clean_for_tts(x)` nunca contiene markdown residual (`*`, backticks).
   - `guard.denied` bloquea siempre cualquier variante de los patrones catastróficos.
   - `attach.take_staged` cumple consume-once (segunda llamada → vacío).
-  - chunking: la concatenación de los chunks reconstruye el texto original (round-trip).
+  - `is_reset_command` / `is_visual_command` respetan word boundaries (no matchean substrings).
 
 ### 6. R1 — Hardening de seguridad puntual
 - **Impacto**: reduce superficie de riesgo (god-mode + voz). **Esfuerzo**: variable. **Riesgo**: medio (cambia comportamiento).
