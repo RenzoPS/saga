@@ -4,11 +4,11 @@
 - **Project Type**: Brownfield
 - **Project Name**: saga
 - **Start Date**: 2026-06-21T22:49:10Z
-- **Current Phase**: **Ciclo 8 — Limpieza de deuda técnica (INCEPTION).** Doc-sync 2026-07-12 CERRADO y
-  en main (commits 342fb2b docs + f269a5d framework). Ciclos 4/5/7 CERRADOS y en main.
-- **Current Stage**: Ciclo 8 CONSTRUCTION CERRADA (código + Build&Test estático verde) en rama
-  `feat/ciclo8-cleanup-deuda`. Q1=A/Q2=A (delegado al AI). **Pendiente: commit/push (OK del usuario).**
-  Pendientes previos sin cambio: meditar qué plugins útiles; bug TTS agéntico abierto (fuera de scope).
+- **Current Phase**: **Ciclo 8 — Limpieza de deuda técnica: CERRADO Y MERGEADO A MAIN** (PR #4, squash
+  de71569). Doc-sync 2026-07-12 en main (342fb2b + f269a5d). Ciclos 4/5/7 CERRADOS y en main.
+- **Current Stage**: Idle. Ciclo 8 completo e2e (INCEPTION + CONSTRUCTION + Build&Test verde), mergeado
+  a main, rama borrada (remoto + local). Pendientes previos sin cambio: meditar qué plugins útiles;
+  bug TTS agéntico abierto (fuera de scope). Paso manual del usuario: `pip uninstall` de las 2 deps muertas.
 - **Última actualización de docs del repo**: U11 (commit 57399b3) sincronizó `docs/` + README. El toggle hoy es
   `CLAUDE_PLUGINS` (antes `VOICE_FULL_STACK`, renombrado en U11).
 
@@ -54,7 +54,9 @@
   3 archivos: vc/runtime.py (rewrite, saca cadena muerta), vc/claudecli.py (no-ops + de-indent),
   pyproject.toml (2 deps muertas). Summary: construction/ciclo8-cleanup/code/generation-summary.md.
 - [x] Build & Test — CERRADO OK (estático). py_compile + tests 11/11 + import smoke + refs=0 + _cancel vivo.
-  Detalle: construction/build-and-test/ciclo8-build-and-test.md. **Pendiente: commit/push (OK del usuario).**
+  Detalle: construction/build-and-test/ciclo8-build-and-test.md.
+- [x] **CERRADO Y MERGEADO A MAIN** (PR #4, squash de71569). Rama feat/ciclo8-cleanup-deuda borrada
+  (remoto + local). Deuda restante flageada: `pip uninstall` de las 2 deps muertas (paso manual del usuario).
 
 ## Ciclo 4 — Migración modo console → modo room (LiveKit)
 - **Tipo**: migration/refactor del TRANSPORTE de audio. El cerebro IA (STT/LLM/TTS/VAD/wake) se conserva.
