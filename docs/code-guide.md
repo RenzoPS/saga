@@ -77,7 +77,7 @@ son densos y confiables** — leelos en el archivo.
   (`claude -p`). Maneja imagen (multimodal por stdin), reintento de sesión, y respeta el flag global
   de cancelación.
 - **`vc/session.py`** — sesión uuid persistida (escritura atómica) + detección de keywords:
-  `is_reset_command`, `is_visual_command`, `is_goodbye` (esta última quedó **sin uso** — código muerto).
+  `is_reset_command`, `is_visual_command`.
 - **`vc/attach.py`** — adjuntos del panel, **consume-once**: texto en memoria del proceso agente,
   imagen como path en `/tmp`. `take_staged()` consume en el turno.
 - **`vc/desktop.py`** — integración Hyprland: `grim` (screenshot), monitor kitty con tail del log.
@@ -115,6 +115,7 @@ son densos y confiables** — leelos en el archivo.
 
 ## `tests/` y `tools/`
 
-- **`tests/test_pure.py`** — unittest de funciones puras: TTS (clean/chunk/flush), keywords de
-  sesión, guard denylist, attach consume-once. Es la verificación automatizada del repo.
-- **`tools/say.py`** — utilidad TTS suelta (auxiliar, no test).
+- **`tests/test_pure.py`** — unittest de funciones puras (3 clases): keywords de sesión
+  (`TestSessionKeywords`), guard denylist (`TestGuardDenylist`), attach consume-once (`TestAttach`).
+  Es la verificación automatizada del repo (la corre el CI en `.github/workflows/tests.yml`).
+- **`tools/measure_stack.py`** — harness de medición de recursos del stack agéntico (RSS/CPU/TTFT, U11).
