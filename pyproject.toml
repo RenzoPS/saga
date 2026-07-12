@@ -17,8 +17,6 @@ dependencies = [
     "livekit-agents",                      # runtime de audio: captura/streaming/VAD/turn/barge-in
     "livekit-plugins-silero",              # VAD (voz vs silencio)
     "livekit-plugins-deepgram",            # STT Nova-3 + TTS Aura-2 (streaming, default)
-    "livekit-plugins-noise-cancellation",  # BVC: saca ruido/voces de fondo del mic
-    "livekit-plugins-turn-detector",       # EOU semántico multilingüe (anti-chopping de turnos)
     "python-dotenv",                       # carga DEEPGRAM_API_KEY de .env.local
     # --- Fallback local (si no hay DEEPGRAM_API_KEY), DENTRO del agente ---
     "faster-whisper==1.2.1",   # STT fallback local (lk/whisper_stt.py)

@@ -18,7 +18,7 @@ from .config import (
     CLAUDE_DAEMON,
     build_claude_base_args,
 )
-from .runtime import log, _cancel, set_current_proc
+from .runtime import log, _cancel
 from .session import get_active_session_id, touch_session, reset_session
 
 
@@ -176,7 +176,6 @@ def _ask_oneshot(
             log(f"claude SPAWN EXC: {type(e).__name__}: {e}")
             return
 
-        set_current_proc(proc)
         if stdin_payload is not None and proc.stdin is not None:
             try:
                 proc.stdin.write(stdin_payload)
@@ -185,51 +184,48 @@ def _ask_oneshot(
             except Exception as e:
                 log(f"stdin write EXC: {type(e).__name__}: {e}")
         text_received = False
-        try:
-            assert proc.stdout is not None
-            deadline = time.time() + CLAUDE_TIMEOUT_S
-            for raw_line in proc.stdout:
-                if _cancel.is_set():
-                    log("stream cancelled, breaking")
-                    break
-                if time.time() > deadline:
-                    log(f"claude STREAM TIMEOUT after {CLAUDE_TIMEOUT_S}s")
-                    break
-                line = raw_line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if obj.get("type") != "stream_event":
-                    continue
-                event = obj.get("event", {})
-                if event.get("type") != "content_block_delta":
-                    continue
-                delta = event.get("delta", {})
-                if delta.get("type") != "text_delta":
-                    continue
-                text = delta.get("text", "")
-                if text:
-                    if not text_received:
-                        if on_first_token is not None:
-                            try:
-                                on_first_token()
-                            except Exception:
-                                pass
-                        text_received = True
-                    yield text
+        assert proc.stdout is not None
+        deadline = time.time() + CLAUDE_TIMEOUT_S
+        for raw_line in proc.stdout:
+            if _cancel.is_set():
+                log("stream cancelled, breaking")
+                break
+            if time.time() > deadline:
+                log(f"claude STREAM TIMEOUT after {CLAUDE_TIMEOUT_S}s")
+                break
+            line = raw_line.strip()
+            if not line:
+                continue
             try:
-                proc.wait(timeout=3)
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if obj.get("type") != "stream_event":
+                continue
+            event = obj.get("event", {})
+            if event.get("type") != "content_block_delta":
+                continue
+            delta = event.get("delta", {})
+            if delta.get("type") != "text_delta":
+                continue
+            text = delta.get("text", "")
+            if text:
+                if not text_received:
+                    if on_first_token is not None:
+                        try:
+                            on_first_token()
+                        except Exception:
+                            pass
+                    text_received = True
+                yield text
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.terminate()
+            try:
+                proc.wait(timeout=2)
             except subprocess.TimeoutExpired:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-        finally:
-            set_current_proc(None)
+                proc.kill()
 
         if _cancel.is_set():
             return
