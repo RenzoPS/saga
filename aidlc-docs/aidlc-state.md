@@ -4,11 +4,12 @@
 - **Project Type**: Brownfield
 - **Project Name**: saga
 - **Start Date**: 2026-06-21T22:49:10Z
-- **Current Phase**: **Ciclo 8 — Limpieza de deuda técnica: CERRADO Y MERGEADO A MAIN** (PR #4, squash
-  de71569). Doc-sync 2026-07-12 en main (342fb2b + f269a5d). Ciclos 4/5/7 CERRADOS y en main.
-- **Current Stage**: Idle. Ciclo 8 completo e2e (INCEPTION + CONSTRUCTION + Build&Test verde), mergeado
-  a main, rama borrada (remoto + local). Pendientes previos sin cambio: meditar qué plugins útiles;
-  bug TTS agéntico abierto (fuera de scope). Paso manual del usuario: `pip uninstall` de las 2 deps muertas.
+- **Current Phase**: **Ciclo 9 — Auditoría y hardening de Testing + Security: INCEPTION ACTIVA** (2026-07-13).
+  Ciclo 8 (limpieza de deuda) CERRADO Y MERGEADO A MAIN (PR #4, squash de71569). Ciclos 4/5/7 CERRADOS y en main.
+- **Current Stage**: Ciclo 9 — Requirements Analysis COMPLETO, esperando aprobación del usuario para pasar a
+  Workflow Planning. **Cambio de postura del proyecto**: Security + PBT pasan a extensiones BLOQUEANTES
+  (ver Extension Configuration). Pendientes previos sin cambio: meditar qué plugins útiles; bug TTS agéntico
+  abierto (fuera de scope). Paso manual del usuario: `pip uninstall` de las 2 deps muertas.
 - **Última actualización de docs del repo**: U11 (commit 57399b3) sincronizó `docs/` + README. El toggle hoy es
   `CLAUDE_PLUGINS` (antes `VOICE_FULL_STACK`, renombrado en U11).
 
@@ -35,7 +36,127 @@
     predicting end of turn". El turn detector era el 78% de la RAM (único consumidor grande).
   > **Ciclo 7 cerrado por ahora** (U9 CPU + U10 RAM). Worker pasó de ~410%/2.6 GB a ~40%/0.9 GB.
   > Próximo salto de hardware chico: split Pi (browser/mic vs worker) + onnxruntime-web para el wake (futuro).
-- **Ciclo 8 (NUEVO) — Limpieza de deuda técnica**: cleanup brownfield, sin lógica nueva, sin tocar el flujo
+- **Ciclo 9 (NUEVO) — Auditoría y hardening de Testing + Security** (2026-07-13): el framework pasa a ser
+  standard antes/durante cada desarrollo → hay que ponerse al día con sus metodologías de seguridad y testing.
+  Extensiones Security + PBT ACTIVADAS como bloqueantes (primera vez en el proyecto). Modelo de amenaza = C
+  (mishears + software local hostil + prompt injection). Alcance = C (auditoría + hardening completo).
+  NFR duro: el turno de voz no puede regresar más de +300ms. **Hallazgo estructural**: `--permission-mode auto`
+  EXISTE en el CLI (verificado en Claude Code 2.1.207) → se puede salir del `--dangerously-skip-permissions`
+  sin perder el flujo automático de voz (sujeto a verificación empírica en modo no-interactivo).
+  Requirements: inception/requirements/ciclo9-security-testing-requirements.md.
+
+### INCEPTION Ciclo 9
+- [x] Workspace Detection — RESUME (brownfield)
+- [x] Reverse Engineering — SKIP (refresh 2026-07-12 vigente)
+- [x] Requirements Analysis — COMPLETO (ciclo9-security-testing-requirements.md; Q1=A Security bloqueante,
+  Q2=A PBT bloqueante full, Q3=B Resiliency off, Q4=C prompt injection, Q5=C hardening completo).
+  **Correcciones del usuario (2026-07-13)**: NFR1 = latencia **NO DETECTABLE** (no "+300ms"; baseline = turno
+  sin plugins; gate perceptual + benchmark). NFR3 = seguridad **INCONDICIONAL, sin toggle de apagado**
+  (se rompe el patrón "default OFF + opt-in" de los ciclos 4-8; la reversibilidad la da git, no un flag).
+  **Modelo de permisos DECIDIDO**: `--permission-mode auto` (el usuario prefiere que saga tenga juicio propio;
+  `dontAsk` descartado por limitante). + FR2.5 nuevo: regla anti-interactivo en el system prompt.
+  Riesgo #1 a MEDIR: el clasificador de `auto` puede sumar latencia → gate contra NFR1 (plan B = dontAsk).
+- **Rama de trabajo**: `feature/security-testing-workflow`
+- [x] User Stories — SKIP (hardening interno + tests; sin personas ni features de cara al usuario)
+- [x] Workflow Planning — COMPLETO (plans/execution-plan-ciclo9.md). Riesgo: **HIGH**. Stages a EJECUTAR:
+  Units Generation + Functional Design (obligatorio por PBT-01) + NFR Requirements (obligatorio por PBT-09)
+  + Code Generation + Build&Test. SKIP: Application Design (sin componentes nuevos), NFR Design, Infra Design.
+  **3 unidades secuenciales**: U1 (red de tests + CI, riesgo bajo) → U2 (hardening orb_server, riesgo medio)
+  → U3 (modelo de permisos: auto mode + guard fail-closed + MCP + prompt anti-interactivo, riesgo ALTO).
+  Orden deliberado: los tests primero para tener red antes de tocar lo peligroso.
+  Gates bloqueantes: G1 latencia no detectable · G2 no regresión · G3 SECURITY · G4 PBT · G5 suite verde.
+- [x] Application Design — SKIP (sin componentes/servicios nuevos)
+- [x] **Units Generation — COMPLETO** (Part 1 plan + Part 2 artefactos). Decisiones del usuario:
+  Q1=A (**un PR por unidad**: U1→merge→U2→merge→U3→merge; si U3 falla el gate, U1+U2 ya están a salvo en main)
+  · Q2=A (tests solo sobre la superficie de seguridad: orb_server, config, guard; el resto = deuda declarada)
+  · Q3=C (**ruff** en todo el repo + **mypy** solo en los 3 módulos de seguridad) · Q4=C (**NO** denylist propia
+  de tools MCP: no escala y sería defensa contra el usuario; se delega al clasificador de `auto` + reglas
+  `permissions.deny` declarativas).
+  **ACLARACIÓN DE SCOPE del usuario**: la defensa es contra **lo destructivo OBVIO** (accidentes/mishears),
+  NO contra órdenes legítimas — si Renzo pide algo destructivo y saga tiene el tool, saga lo ejecuta. Garantizar
+  que la orden sea auténtica = detección de voz + wake → se endurece en el **Ciclo 6 (speaker verification)**,
+  FUERA de scope acá.
+  Artefactos: application-design/unit-of-work-ciclo9.md + unit-of-work-dependency-ciclo9.md.
+  Trazabilidad: **20 FR + 5 NFR asignados, cero huérfanos**.
+
+> **INCEPTION Ciclo 9 CERRADA** (2026-07-13). Units Generation aprobado por el usuario.
+
+### Convención de artefactos — ESTRUCTURA DEL FRAMEWORK, ESTRICTA (decisión del usuario, 2026-07-13)
+El framework (`CLAUDE.md` → Directory Structure) organiza **por STAGE en Inception** (rutas planas) y **por UNIDAD
+en Construction** (`construction/{unit-name}/`). Se sigue al pie, sin inventar subcarpetas por feature:
+- Inception → ruta plana + prefijo de ciclo (los nombres canónicos `requirements.md` /
+  `requirement-verification-questions.md` **ya están ocupados por el Ciclo 1**, por eso el prefijo; es la
+  convención de facto de los ciclos 2-8): `inception/requirements/ciclo9-security-testing-*.md`,
+  `inception/plans/execution-plan-ciclo9.md`, `inception/application-design/unit-of-work-ciclo9.md`.
+- Construction → `construction/U1-tests-ci/{functional-design,nfr-requirements,code}/` (esto SÍ es la
+  estructura literal del framework, igual que `U1-infra-room/`, `U8-dispatch-consistente/` de ciclos previos).
+> Descartada la subcarpeta por slug en Inception (patrón de base-de-tramites): NO está en el framework.
+
+### CONSTRUCTION Ciclo 9 (en curso)
+- [ ] **U1 — Red de tests + CI** (riesgo bajo, no toca runtime) ← ACTUAL
+  - [x] **Functional Design — COMPLETO** (obligatorio por PBT-01). Artefactos en `construction/U1-tests-ci/functional-design/`
+    (business-logic-model + business-rules + domain-entities). Plan: `construction/plans/U1-tests-ci-functional-design-plan.md`.
+    **10 propiedades identificadas (P1-P10)** leídas del código. PBT-05 (oracle) = N/A declarado.
+    Decisiones: **Q1=B pytest** (corre los unittest existentes sin tocarlos; el argumento "stdlib-only" se cae
+    al entrar Hypothesis) · **Q2=C pip-audit bloqueante CON allowlist** (un CVE en transitiva sin patch dejaría
+    el CI rojo y trabado; un CI siempre rojo deja de leerse) · **Q3=A** bypasses del guard se registran y se
+    difieren a U3.
+    **HALLAZGO ANTICIPADO (P4)** ⚠️ propiedad de seguridad no verificada hoy: el socket de control usa
+    `readline()` como framing y manda el payload en base64 — si el payload pudiera contener `\n`, un adjunto
+    partiría el mensaje e **inyectaría un comando en el socket del agente**. Se sostiene porque `b64encode`
+    (≠ `encodebytes`) no emite saltos de línea, pero es un supuesto IMPLÍCITO que nadie verifica.
+    **EXPECTATIVA (P7)**: el PBT del guard VA A ENCONTRAR bypasses (`rm -r -f` no matchea el regex actual).
+    Eso es el test funcionando. Se registran y los cierra U3.
+  - [x] **NFR Requirements — COMPLETO** (obligatorio por PBT-09). Artefactos en `construction/U1-tests-ci/nfr-requirements/`
+    (nfr-requirements + tech-stack-decisions). Plan: `construction/plans/U1-tests-ci-nfr-requirements-plan.md`.
+    **PBT-09 CUMPLIDO**: **Hypothesis** elegido, con sus 4 requisitos verificados (generadores custom, shrinking,
+    seed, integración con el runner). Stack: pytest (corre los unittest existentes sin tocarlos) · ruff (todo el
+    repo) · mypy (solo guard/config/orb_server: el repo no tiene anotaciones sistemáticas) · pip-audit (bloqueante
+    + allowlist). Deps en `[project.optional-dependencies].test`, **sin pins**. Perfiles Hypothesis: default (100)
+    en CI · **thorough (1000+) para las propiedades de SEGURIDAD** (P4/P7/P8), a demanda. `deadline=None` solo
+    donde hay I/O (P5/P6) — un timeout en runner compartido es ruido, no un bug.
+    **NFR1 (latencia)**: N/A como impacto (U1 no toca producción), pero U1 **construye el método de medición**
+    y captura el **baseline** contra el que se medirá el gate de U3. Sin baseline, el gate sería una opinión.
+    Verificado (no supuesto): Python 3.12 en venv/CI/.python-version; pyproject SIN grupo de test hoy.
+  - [x] NFR Design — SKIP (sin patrones NFR nuevos) · [x] Infra Design — SKIP (sin cloud/IaC)
+  - [x] **Code Generation — Part 1 (plan) + Part 2 (código) HECHOS**. 5 archivos nuevos (tests/generators.py,
+    test_properties.py, test_orb_server.py, test_config.py, .pip-audit-allowlist.txt) + 3 modificados
+    (pyproject.toml, .github/workflows/tests.yml, docs/tech-debt-plan.md). **CERO código de producción tocado**
+    (verificado con git diff --name-only). Verif: pytest 32 passed + 4 xfailed · ruff limpio · diff sin producción.
+    **4 HALLAZGOS (el valor de U1)**: F1🔴 BUG REAL — `_read_plugins_blacklist` crashea en el arranque con
+    `{"disabledPlugins": 42}` (TypeError, el docstring promete no romper el arranque y MIENTE); fix 1 línea.
+    F2🔴 mypy — gap de anotación en config.py:118 (no es bug); fix 1 línea (mismo archivo que F1).
+    F3🟠 BYPASSES del guard MEDIDOS (P7): `rm -r -f` (flags separadas) y `rm --recursive --force` (forma larga)
+    NO se bloquean → input directo para U3. F4🟡 CVEs en transitivas (aiohttp/nltk/pillow/pip), la mayoría con
+    fix disponible → allowlist creada, decisión de actualizar-vs-aceptar pendiente. Además 2 xfail-strict que
+    documentan los agujeros a cerrar: S5 (orb sin auth → U2) y S1 (god-mode → U3); cuando se cierren, XPASS obliga
+    a des-marcarlos. Deuda declarada D6 (sin tests en lk/*, daemon, vcctl). D2+R2 CERRADAS en tech-debt-plan.
+    Summary: construction/U1-tests-ci/code/generation-summary.md.
+    **HALLAZGOS RESUELTOS (autorizado por el usuario: "esta rama deja TODA la base testing+security sólida")**:
+    F1 ✅ (guardia contra no-lista en config.py; el crash de arranque se fue; xfail de P5 removido → test verde).
+    F2 ✅ (anotación `settings: dict`; mypy limpio). F4 ✅ POR UPGRADE (aiohttp→3.14.1, pillow→12.3, nltk→3.10;
+    core intacto; import smoke OK; requirements.txt actualizado; allowlist VACÍA; pip-audit limpio venv + CI).
+    F3 (bypasses del guard) → queda para U3 según plan. Producción tocada = SOLO lo aprobado: vc/config.py + lock.
+    Deuda declarada: D6 (tests lk/daemon/vcctl), D7 (audit CI = solo lock curado). D2+R2 cerradas.
+    **Verif final**: pytest 33 passed + 3 xfailed (P7→U3, S5→U2, S1→U3) · ruff limpio · mypy limpio · 11 viejos OK.
+    ⚠️ Bump de transitivas del stack de voz: import smoke OK, pero **turno de voz e2e sin validar** → Build & Test.
+  - [x] **Build & Test (estático) — CERRADO OK**. build (editable) + py_compile todo el repo + pytest 33p/3xf
+    + thorough 9p/1xf + ruff limpio + mypy limpio + pip-audit limpio (venv + CI). Los 11 viejos intactos.
+    Baseline NFR1: TTFT modo rápido (CLAUDE_PLUGINS=0) **mediana ~2.09s** (120 turnos del histórico) → número
+    que U3 no puede regresar. Artefacto: construction/build-and-test/U1-tests-ci-build-and-test.md.
+    ⏳ **PENDIENTE (único): validación en vivo del usuario** — turno de voz tras el bump de deps (aiohttp/pillow/nltk)
+    para confirmar no-regresión del stack de voz. Riesgo bajo (core intacto, import smoke OK) pero es runtime.
+  - [x] **VALIDACIÓN EN VIVO — OK (usuario, 2026-07-13)**: levantó saga y probó turno de voz, "todo 100% en
+    orden". El bump de deps (aiohttp/pillow/nltk) NO rompió el stack de voz. **U1 CERRADA.**
+> **✅ U1 CERRADA Y VALIDADA EN VIVO.** Red de tests + CI + 3 hallazgos de seguridad resueltos (F1 crash de
+> arranque, F2 tipo, F4 CVEs). Pendiente: commit + PR (Q1=A: un PR por unidad) — espera OK explícito de git.
+> Luego → **U2 (hardening orb_server)**.
+- [ ] U2 — Hardening orb_server (riesgo medio; C1: orb.html ↔ orb_server atómico)
+- [ ] U3 — Modelo de permisos (riesgo ALTO; gate G1 de latencia)
+- Por unidad: Functional Design (obligatorio PBT-01) + NFR Requirements (obligatorio PBT-09) + Code Gen + Build&Test
+- Merge: **un PR por unidad** (Q1=A)
+
+- **Ciclo 8 — Limpieza de deuda técnica**: cleanup brownfield, sin lógica nueva, sin tocar el flujo
   de voz. CORE: FR1 (cadena muerta cancel SIGUSR2 en vc/runtime.py + no-ops en claudecli) + FR2 (deps muertas
   turn-detector/noise-cancellation en pyproject). Optativos a decidir: wake shutdown, pin LiveKit, lint/CI.
   Requirements: inception/requirements/ciclo8-cleanup-requirements.md.
@@ -611,6 +732,20 @@ ACAV) queda entrenado y listo; el blocker para activarlo es el bug del buffer, N
 - **Structure patterns**: ver code-generation.md Critical Rules
 
 ## Extension Configuration
+
+### VIGENTE — Ciclo 9 (2026-07-13). Cambio de postura: Security y PBT pasan a BLOQUEANTES.
+| Extension | Enabled | Enforcement | Decided At |
+|---|---|---|---|
+| Security Baseline | **Sí** | Blocking (15 reglas) | Requirements Analysis Ciclo 9 (Q1=A) |
+| Property-Based Testing | **Sí** | Blocking — modo FULL (PBT-01..10, no partial) | Requirements Analysis Ciclo 9 (Q2=A) |
+| Resiliency Baseline | No | — | Requirements Analysis Ciclo 9 (Q3=B) |
+
+> Reglas completas CARGADAS: `security-baseline.md` + `property-based-testing.md`. `resiliency-baseline.md` NO cargado.
+> Decisión del usuario: el framework ahora es standard y se usa antes/durante cada desarrollo → seguridad y
+> testing dejan de ser opt-out. A partir del Ciclo 9, todo stage debe presentar compliance summary de
+> SECURITY y PBT; el incumplimiento de una regla APLICABLE es blocking finding (no se cruza el gate).
+
+### Histórico (Ciclos 1–8) — opt-out
 | Extension | Enabled | Decided At |
 |---|---|---|
 | Security Baseline | No | Requirements Analysis |

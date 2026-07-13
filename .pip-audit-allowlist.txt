@@ -1,0 +1,9 @@
+# Allowlist de pip-audit — CVEs conocidos y ACEPTADOS explícitamente (SECURITY-10).
+#
+# Formato: un ID de vuln por línea (PYSEC-… o CVE-…). Las líneas con # y las vacías se ignoran.
+# El CI (.github/workflows/tests.yml, job `audit`) las pasa como --ignore-vuln.
+#
+# ESTADO 2026-07-13 (Ciclo 9 / U1): VACÍA. Todos los CVEs que pip-audit encontró se cerraron por
+# UPGRADE (no por aceptación): aiohttp 3.13.5→3.14.1, pillow 12.2→12.3, nltk 3.9.4→3.10, pip→26.x.
+# `pip-audit` local (venv completo) y por la vía del CI (-r requirements.txt) dan ambos limpio.
+# Si en el futuro aparece un CVE en una transitiva SIN fix disponible, se agrega acá CON justificación.

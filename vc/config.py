@@ -99,6 +99,8 @@ def _read_plugins_blacklist() -> list:
     except (OSError, ValueError):
         return []
     items = data.get("disabledPlugins", []) if isinstance(data, dict) else []
+    if not isinstance(items, list):        # disabledPlugins puede venir como int/str/dict -> no iterar sobre eso
+        return []
     return [s.strip() for s in items if isinstance(s, str) and s.strip()]
 
 
@@ -111,7 +113,7 @@ PLUGINS_MODE = "on" if _PLUGINS_ENV in ("1", "on", "true", "yes") else "off"
 def _ensure_saga_settings() -> "str | None":
     """Escribe el settings aditivo del daemon: guard (hook) + enabledPlugins:false para los plugins
     que saga apaga. Aislado del global. Degrada a None si no se puede escribir."""
-    settings = {"hooks": {"PreToolUse": [
+    settings: dict = {"hooks": {"PreToolUse": [
         {"matcher": "Bash", "hooks": [
             {"type": "command", "command": f"python3 {GUARD_SCRIPT}"}]}]}}
     if DISABLED_PLUGINS:

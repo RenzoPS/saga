@@ -6,6 +6,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:      # dispara la búsqueda profunda de bypasses (job deep-fuzz) a demanda
 
 jobs:
   test:
@@ -21,7 +22,53 @@ jobs:
       - name: py_compile (sintaxis)
         run: python -m py_compile $(git ls-files '*.py')
 
-      # Suite de funciones puras (TTS-keywords, guard denylist, attach). Stdlib-only:
-      # NO necesita instalar dependencias (la cadena de imports degrada dotenv y no toca livekit).
-      - name: unittest — funciones puras
-        run: python -m unittest tests.test_pure -v
+      # Deps de test (livianas): pytest, hypothesis, ruff, mypy. NO instala el stack pesado
+      # de runtime (livekit/onnxruntime): los módulos bajo test importan livekit de forma lazy,
+      # así que la suite corre sin él. pip-audit corre aparte contra el lock (no necesita instalar).
+      - name: instalar deps de test
+        run: pip install pytest hypothesis ruff mypy
+
+      # Lint de todo el repo (E/F = bugs reales; los patrones deliberados de saga se ignoran
+      # en [tool.ruff.lint] de pyproject.toml).
+      - name: ruff (lint)
+        run: ruff check .
+
+      # Typecheck ACOTADO a los 3 módulos de seguridad (ver [tool.mypy]).
+      - name: mypy (módulos de seguridad)
+        run: mypy
+
+      # Suite completa: los 11 tests de ejemplo existentes + los nuevos + los property-based
+      # (Hypothesis). La seed se loguea en cada corrida (PBT-08) para reproducir cualquier fallo.
+      - name: pytest (ejemplos + property-based)
+        run: pytest tests/ -v --hypothesis-show-statistics
+
+  # Auditoría de CVEs (SECURITY-10). Audita el LOCK (requirements.txt) directo, sin instalar
+  # el stack: rápido y fiel al árbol real de dependencias. Bloqueante, con allowlist versionada.
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: instalar pip-audit
+        run: pip install pip-audit
+      - name: pip-audit (CVEs en dependencias, bloqueante + allowlist)
+        run: pip-audit -r requirements.txt $(grep -vE '^\s*#|^\s*$' .pip-audit-allowlist.txt | sed 's/^/--ignore-vuln /' | tr '\n' ' ')
+
+  # Búsqueda PROFUNDA de bypasses del guard y del framing del socket (perfil thorough de
+  # Hypothesis, 1000 ejemplos). NO bloquea el push: es exploración adversarial a demanda.
+  # Se dispara solo manualmente (workflow_dispatch en el propio repo).
+  deep-fuzz:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pytest hypothesis
+      - name: pytest (perfil thorough)
+        env:
+          HYPOTHESIS_PROFILE: thorough
+        run: pytest tests/test_properties.py -v --hypothesis-show-statistics
