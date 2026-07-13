@@ -227,10 +227,10 @@ en Construction** (`construction/{unit-name}/`). Se sigue al pie, sin inventar s
   `~/.config/hypr/UserConfigs/UserKeybinds.conf` (skill kool-hyprland). Verif final: pytest 45p/2xf · thorough
   26p · ruff/mypy limpios · diff = solo 7 archivos de U2. Deuda menor: favicon.ico 401 (cosmético).
 - [x] **CÓDIGO VALIDADO Y APROBADO POR EL USUARIO (2026-07-13)**: *"Doy por validado y aprobado el codigo"*.
-> **✅ U2 COMPLETA — todas las etapas del framework cerradas y validadas en vivo.** Pendiente operativo (git,
-> requiere OK explícito del usuario): commit + PR a main (un PR por unidad, Q1=A). Al mergear, el xfail S5 ya
-> des-marcado queda firme; el próximo es U3 (riesgo ALTO: modelo de permisos + la objeción abierta de la
-> confirmación por voz).
+> **✅ U2 CERRADA Y MERGEADA A MAIN** (PR #6, squash 2023536). Rama borrada (local + remoto). Suite en main:
+> 45 passed / 2 xfailed (los 2 = U3: S1 god-mode, P7 guard). El xfail S5 quedó des-marcado firme (agujero
+> cerrado). Deuda menor: favicon.ico 401 (cosmético). **Próximo: U3** (riesgo ALTO — modelo de permisos +
+> objeción abierta de la confirmación por voz).
 - **Punto de coordinación C1** (crítico): orb.html ↔ orb_server ATÓMICO. Si el server exige token y el cliente
   no lo manda, el orbe no conecta y saga queda muda. Se valida en vivo.
 - **Red que ya espera**: el xfail-strict `test_no_auth_by_default_is_the_hole` (S5) hará XPASS cuando FR3.1 cierre
