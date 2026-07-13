@@ -27,6 +27,18 @@ dependencies = [
     "livekit-wakeword[listener]",  # wake word "hey saga" (SAGA_WAKE_ENABLED=1 para activar)
 ]
 
+# Dependencias de DESARROLLO (Ciclo 9). Ninguna entra al runtime de saga.
+# Instalar: pip install -e ".[test]"   (en el venv del proyecto, no global)
+# Sin pins: se toma lo que resuelva el manager (solo se pinea donde hay motivo concreto).
+[project.optional-dependencies]
+test = [
+    "pytest",       # runner (corre los TestCase de unittest existentes sin tocarlos)
+    "hypothesis",   # property-based testing (PBT-09)
+    "ruff",         # lint
+    "mypy",         # typecheck (solo los módulos de seguridad, ver [tool.mypy])
+    "pip-audit",    # CVEs en dependencias (SECURITY-10)
+]
+
 # Comandos instalados (reemplazan a los wrappers hechos a mano en ~/.local/bin).
 # Tras `pip install -e .` quedan en .venv/bin/saga y .venv/bin/saga-ctl.
 [project.scripts]
@@ -38,3 +50,34 @@ saga-ctl = "vcctl:main"
 # ruta (subprocess), no se instalan como módulos; solo vcctl se expone para su comando.
 packages = ["vc"]
 py-modules = ["vcctl"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+# vendor/ es código de terceros (SDK de LiveKit); models/ son binarios.
+exclude = [".venv", "models", "orb/vendor", "__pycache__"]
+
+[tool.ruff.lint]
+# E/F = pycodestyle + pyflakes (bugs reales: imports muertos, variables sin usar, shadowing).
+# No se imponen reglas de estilo sobre un codebase que ya tiene su voz.
+select = ["E", "F"]
+ignore = [
+    "E501",  # largo de línea: el código existente usa líneas largas a propósito
+    # E402 es DELIBERADO en saga: varios módulos (lk/agent.py, orb_server.py, los tests)
+    # hacen setup de sys.path / env (os.environ.pop, load_dotenv) ANTES de importar, porque
+    # el orden importa para el arranque. No es un bug; ignorarlo es correcto, no un workaround.
+    "E402",
+    "E701",  # sentencias compuestas en una línea (estilo del repo en guards cortos)
+    "E741",  # nombre de variable ambiguo (`l`): nit de estilo, no un bug
+    "F541",  # f-string sin placeholders: inofensivo
+]
+
+# Typecheck ACOTADO a los 3 módulos de seguridad (los que el Ciclo 9 toca).
+# El resto del repo no tiene anotaciones sistemáticas: mypy global sería ruido, y
+# anotarlo entero es un refactor que no es de seguridad (fuera de scope).
+[tool.mypy]
+files = ["vc/guard.py", "vc/config.py", "orb/orb_server.py"]
+python_version = "3.12"
+ignore_missing_imports = true

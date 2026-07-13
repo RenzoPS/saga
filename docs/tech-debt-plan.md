@@ -42,12 +42,14 @@ por el usuario, 10/10). Referencia: `aidlc-docs/construction/build-and-test/cicl
 | P1 | Path de Win+Z = **glue propio** (socket Unix + SSE), no primitiva LiveKit | `lk/agent.py` + `orb/orb_server.py` | Baja (pulido) |
 | P2 | Volumen de la respuesta **baja** en call de voz (echo-cancellation ducking del browser) | cliente orbe (`orb.html`) | Baja (pulido) |
 | P3 | Ruido de fondo: **BVC es Cloud-only**; en self-hosted no se usa (room se apoya en VAD Silero) | `lk/agent.py` | Baja (evaluar) |
-| D2 | Sin lint / typecheck / CI | repo | Media |
+| D2 | Sin lint / typecheck / CI | repo | ✅ Resuelta (Ciclo 9 / U1: ruff + mypy + pip-audit en CI) |
 | D3 | LiveKit **sin pin** en `pyproject.toml` | `pyproject.toml` | Media |
 | D4 | `is_goodbye` huérfana (código muerto testeado) | `vc/session.py` + `tests/test_pure.py` | ✅ Resuelta (removida) |
 | D5 | `import os` duplicado | `vc/app.py` | ✅ Resuelta (U7 reescribió `vc/app.py`) |
-| R1 | Hardening de seguridad puntual (recomendación) | god-mode, sockets, secretos | Media |
-| R2 | Adoptar **PBT-partial** (Hypothesis) (recomendación) | funciones puras | Baja-media |
+| D6 | Sin tests en `lk/*`, `claude_daemon.py`, `vcctl.py`, `vc/claudecli.py`, `vc/runtime.py` (mocks pesados) | esos módulos | Baja (declarada en Ciclo 9 / U1) |
+| D7 | `pip-audit` en CI audita solo el lock curado (44 deps directas), no el cierre transitivo completo | `.github/workflows/tests.yml` | Baja (declarada en Ciclo 9 / U1) |
+| R1 | Hardening de seguridad puntual (recomendación) | god-mode, sockets, secretos | En curso (Ciclo 9: U2 orb_server + U3 permisos) |
+| R2 | Adoptar **PBT** (Hypothesis) | funciones puras | ✅ Resuelta (Ciclo 9 / U1: PBT full, P1-P10) |
 
 ## Plan priorizado
 
