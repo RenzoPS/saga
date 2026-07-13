@@ -80,6 +80,23 @@
   "livekit-client":"/vendor/livekit/livekit-client.esm.mjs"
 }}
 </script>
+<script>
+// ===== token del orbe (U2/FR3.1) — en un <script> PLANO a propósito =====
+// TIENE que estar acá (script sincrónico), NO dentro de un <script type="module">: los módulos con
+// top-level await (el de three.js hace `await import('three')`) se SUSPENDEN, y el módulo de LiveKit
+// llamaría a __orbFetch ANTES de que se defina -> "no se pudo pedir el token" -> el orbe no se une al
+// room -> nada procesa. Un script plano corre durante el parseo, antes de cualquier módulo diferido.
+// El token llega por la URL de bootstrap (saga-ctl abre .../?token=<t>) y lo DEJAMOS en la URL: si lo
+// limpiáramos, un F5 re-pediría "/" sin token -> 401. Es local (127.0.0.1) + Referrer-Policy: no-referrer.
+// Dos vías (el browser no da otra): header X-Orb-Token en los fetch; ?token= en el SSE (EventSource no
+// acepta headers custom).
+window.__orbToken = (new URLSearchParams(location.search)).get('token') || '';
+window.__orbFetch = function(path, opts){
+  opts = opts || {};
+  opts.headers = Object.assign({}, opts.headers || {}, {'X-Orb-Token': window.__orbToken});
+  return fetch(path, opts);
+};
+</script>
 <script type="module">
 let booted=false; setTimeout(()=>{if(!booted)document.getElementById('fallback').style.display='flex';},5000);
 try{
@@ -128,9 +145,14 @@ function setState(name){
 window.setState=setState;
 window.__orbLift=function(on){ liftTarget=on?1:0; };   // el panel le avisa al orbe que suba/baje
 
+// token del orbe: definido arriba en un <script> PLANO (ver el comentario largo ahí — es a propósito,
+// para que exista antes de que corran los módulos). Acá solo lo referenciamos para el SSE.
+const ORB_TOKEN=window.__orbToken;
+
 // ===== SSE =====
 (function connect(){
-  const es=new EventSource('/events'); const c=document.getElementById('conn');
+  // ?token=: el SSE es la unica via sin headers custom (limitacion del browser, no eleccion nuestra).
+  const es=new EventSource('/events?token='+encodeURIComponent(ORB_TOKEN)); const c=document.getElementById('conn');
   es.onopen=()=>{c.textContent='●';c.className='ok';};
   es.onerror=()=>{c.textContent='●';c.className='off';};
   es.onmessage=e=>{ const d=e.data&&e.data.trim(); if(d) setState(d); };  // solo estado (sin nivel de audio)
@@ -424,7 +446,7 @@ frame();
   addEventListener('keydown',e=>{ if(e.key==='Escape'&&isOpen()) closePanel(); });
 
   // ---- staging del texto: va a MEMORIA del agente por /stage (overwrite; vacío limpia) ----
-  function postStage(body){ try{ fetch('/stage',{method:'POST',body}); }catch(e){} }
+  function postStage(body){ try{ window.__orbFetch('/stage',{method:'POST',body}); }catch(e){} }
   function flushText(){ clearTimeout(saveT); postStage(ta.value.trim()); }
   ta.addEventListener('input',()=>{ clearTimeout(saveT); saveT=setTimeout(()=>postStage(ta.value.trim()),350); });
   // Enter (sin Shift) = cerrar (ya está guardado, se consume en el próximo turno de voz).
@@ -436,7 +458,7 @@ frame();
 
   // Prompt directo por texto: dispara /say (el texto viaja en el comando; el agente limpia el
   // staged solo, sin doble consumo). La imagen pegada (si hay) se mantiene -> se incluye.
-  function postSay(body){ try{ fetch('/say',{method:'POST',body}); }catch(e){} }
+  function postSay(body){ try{ window.__orbFetch('/say',{method:'POST',body}); }catch(e){} }
   function sendText(){
     const t=ta.value.trim(); if(!t)return;
     clearTimeout(saveT); ta.value='';
@@ -446,7 +468,7 @@ frame();
   }
 
   // ---- imagen: paste -> preview + POST inmediato; ✕ -> borra en el server ----
-  function postImage(blob){ try{ fetch('/attach?kind=image',{method:'POST',body:blob}); }catch(e){} }
+  function postImage(blob){ try{ window.__orbFetch('/attach?kind=image',{method:'POST',body:blob}); }catch(e){} }
   function clearImage(){ if(chipImg.getAttribute('src'))URL.revokeObjectURL(chipImg.src);
     chipImg.removeAttribute('src'); imgBlob=null; chip.style.display='none'; }
   function setChip(file){ imgBlob=file; chipImg.src=URL.createObjectURL(file); chip.style.display='flex'; postImage(file); }
@@ -553,7 +575,8 @@ async function publishMic(r){
 async function start(){
   let url, token;
   try {
-    const res = await fetch('/token?identity=saga-client&room=saga');
+    // U2/FR3.6: identity y room los fija el SERVER (antes iban por query y se firmaban en el JWT).
+    const res = await window.__orbFetch('/token');
     if (!res.ok) throw new Error('HTTP ' + res.status);
     let wake;
     ({ url, token, wake } = await res.json());

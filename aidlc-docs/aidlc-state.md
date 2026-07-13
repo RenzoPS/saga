@@ -148,9 +148,94 @@ en Construction** (`construction/{unit-name}/`). Se sigue al pie, sin inventar s
     para confirmar no-regresión del stack de voz. Riesgo bajo (core intacto, import smoke OK) pero es runtime.
   - [x] **VALIDACIÓN EN VIVO — OK (usuario, 2026-07-13)**: levantó saga y probó turno de voz, "todo 100% en
     orden". El bump de deps (aiohttp/pillow/nltk) NO rompió el stack de voz. **U1 CERRADA.**
-> **✅ U1 CERRADA Y VALIDADA EN VIVO.** Red de tests + CI + 3 hallazgos de seguridad resueltos (F1 crash de
-> arranque, F2 tipo, F4 CVEs). Pendiente: commit + PR (Q1=A: un PR por unidad) — espera OK explícito de git.
-> Luego → **U2 (hardening orb_server)**.
+> **✅ U1 CERRADA, VALIDADA EN VIVO Y MERGEADA A MAIN** (PR #5, squash 40dde9c). Rama borrada (remoto + local).
+> Red de tests + CI + 3 hallazgos de seguridad resueltos (F1 crash de arranque, F2 tipo, F4 CVEs). En main:
+> ruff + mypy + pytest/PBT + pip-audit + deep-fuzz. Baseline NFR1 ~2.09s registrado para el gate de U3.
+
+### U2 — Hardening de orb_server (EN CURSO, 2026-07-13)
+- **Rama**: `feature/ciclo9-u2-orb-server` (desde main limpio con U1 ya integrado).
+- **🔬 INVESTIGACIÓN DEL ESTÁNDAR DE INDUSTRIA (2026-07-13)** — pedido explícito del usuario *("no quiero
+  que codeemos cosas [inventadas]; seguramente en la industria ya haya un estándar")*. Artefacto:
+  `inception/requirements/ciclo9-security-research.md` (fuentes primarias: OWASP, NCC Group, MDN/WHATWG,
+  docs oficiales de LiveKit/Jupyter/Ollama/Anthropic). **Consecuencias que CAMBIARON el diseño**:
+  - **El precedente exacto de orb_server es Ollama / CVE-2024-28224**: server local de LLM sin auth con
+    **exfiltración de archivos vía DNS rebinding** demostrada. No es teórico: es el estado actual del código.
+  - **La v1 del plan de Functional Design planteaba FALSAS DISYUNTIVAS** (token *o* cookie *o* header). El
+    estándar (Jupyter, Syncthing, qBittorrent) **no elige: combina** — cada capa tapa un ataque distinto.
+    Token → proceso local · **Host check → DNS rebinding** (el `Origin` NO sirve ahí: el atacante ES
+    same-origin) · header custom con secreto → fuerza preflight → CSRF web.
+  - **Supuesto FALSO corregido (Q7/TTL)**: doc oficial de LiveKit — *"Expiration time only impacts the initial
+    connection, and not subsequent reconnects"* + el server empuja tokens refrescados por el signal channel.
+    → **TTL corto NO rompe reconexiones** (el riesgo anotado no existía) · **el TTL NO limita la sesión** ·
+    **self-hosted no tiene revocación** → el TTL corto ES la única red. TTL explícito = 5 min.
+  - **Requirements ACTUALIZADOS**: FR3.1–FR3.6 precisados + **4 FR nuevos**: **FR3.7** (validar header `Host`,
+    anti-rebinding) · **FR3.8** (`Sec-Fetch-Site`: cubre GET y **SSE**, donde `Origin` no viene en same-origin)
+    · **FR3.9** (grants mínimos del JWT: solo `microphone`; hoy hereda los defaults del SDK) · **FR3.10**
+    (`identity`/`room` los fija el SERVER: hoy vienen del query sin validar y **se firman en el JWT**).
+  - **Objeción abierta registrada para U3** (§4.2 de los requirements): **la confirmación hablada es
+    inyectable por el mismo canal que el ataque**. Dato duro de Anthropic: **~93% de los permission prompts
+    se aprueban sin leerlos** (OWASP **ASI09**, medido en producción) → *si confirmás todo, no confirmás nada*.
+    Guía: *"containment en la capa de entorno primero, comportamiento del modelo después"*.
+- **Scope** (FR3, revisado): FR3.1 auth deny-by-default en TODO endpoint (ORB_TOKEN autogenerado, 3 vías:
+  header/cookie/bootstrap; `hmac.compare_digest`) · FR3.2 **cero headers CORS** + validación de `Origin` ·
+  FR3.3 headers de seguridad (CSP con nonce + `form-action 'none'`, nosniff, XFO, `Referrer-Policy`) ·
+  FR3.4 límites de tamaño (413 **sin leer el body**) · FR3.5 TTL corto explícito del JWT · FR3.6 rate limit
+  en /say + concurrencia 1 (OWASP **LLM10**) · **FR3.7 Host check** · **FR3.8 Sec-Fetch-Site** ·
+  **FR3.9 grants mínimos** · **FR3.10 identity/room del server**.
+- **Riesgo nuevo a verificar EN VIVO**: la CSP `connect-src` **debe** enumerar el WS de LiveKit o **rompe el
+  WebRTC y saga queda muda**. Se determina empíricamente, no de memoria.
+- **RECORTE POR PROPORCIONALIDAD (2026-07-13, decisión del usuario)**: *"tampoco armar algo TAN COMPLEJO,
+  es LOCAL"* + *"el RENDIMIENTO ES CRUCIAL al igual que la seguridad, pero esta última no debería ser tan
+  complicada"*. La v2 sobre-diseñó (aplicaba el estándar de servers expuestos a un equipo monousuario).
+  **Plan reescrito a v3**: solo lo que tapa un atacante REAL en local + cuesta poco. **DESCARTADO explícito
+  (requirements §FR3-OUT)**: rate limit en /say (con token, el único que lo llama es el usuario → protegerlo
+  de sí mismo) · cookie de sesión (traería cookie-tossing; el ?token= en localhost no tiene a quién
+  filtrarse) · CSP con nonce/`connect-src` (riesgo de romper el WebRTC > beneficio) · `Sec-Fetch-Site`
+  (redundante con el token) · validación de `Origin` (no agrega ataque nuevo que frenar). El usuario delegó
+  al 100%.
+- **FR3 final (7, no 10)**: FR3.1 token deny-by-default · FR3.2 cero CORS · FR3.3 headers baratos + CSP
+  acotada (`frame-ancestors`/`form-action`/`base-uri` 'none' — NO toca script/connect-src) · FR3.4 límites
+  de tamaño (413 sin leer) · FR3.5 TTL 5min + grants mínimos · FR3.6 room/identity del server · FR3.7 Host
+  check (anti-rebinding).
+
+#### CONSTRUCTION U2 — TODO EL FLUJO HECHO (estático CERRADO, falta validación en vivo)
+- [x] **Functional Design — COMPLETO** (plan v3 + 3 artefactos en `construction/U2-orb-server/functional-design/`:
+  business-logic-model con **6 propiedades U2-P1…U2-P6** para PBT-01, business-rules, domain-entities).
+- [x] **NFR Requirements — COMPLETO** (`nfr-requirements/nfr-requirements.md`). PBT-09 heredado de U1
+  (Hypothesis, sin herramienta nueva). PBT-05 (oracle) APLICA acá (U2-P4 filesystem, U2-P5 JWT decodificado).
+  Sin dependencias de producción nuevas (secrets/hmac son stdlib).
+- [x] NFR Design / Infra Design — SKIP (sin patrones ni cloud nuevos).
+- [x] **Code Generation Part 1 (plan) + Part 2 (código) HECHOS**. Plan: `construction/plans/U2-orb-server-code-generation-plan.md`.
+  7 archivos: vc/config.py (orb_token/reset), orb/orb_server.py (la puerta _gate), orb/orb.html (token en
+  cliente), vc/orb.py (agente + arranque), vcctl.py (rotación), tests/generators.py (hosts adversariales),
+  tests/test_orb_server.py (6 propiedades + des-marca xfail S5). Summary: `construction/U2-orb-server/code/generation-summary.md`.
+  **Decisión de arquitectura**: el token lo necesitan 3 PROCESOS (server valida, browser, agente hace
+  POST /state) → archivo de runtime 0600 en XDG_RUNTIME_DIR (patrón Jupyter), efímero por arranque.
+  **HALLAZGO (valor del PBT)**: U2-P6 cazó un BUG REAL — `hmac.compare_digest` tira TypeError con no-ASCII
+  → un token Unicode por ?token= CRASHEABA el handler (fail-open por excepción). Corregido a fail-closed.
+- [x] **Build & Test (estático) — CERRADO OK**: pytest 43p/2xf (los 2 xfail = U3: S1, P7; **el xfail S5 se
+  des-marcó → XPASS**). thorough 24p/1xf. ruff limpio · mypy limpio · py_compile · import smoke 3 procesos.
+  curl contra server real: rebinding con token válido → 403, /token sin token → 401, attach >10MB → 413, sin
+  CORS. Artefacto: `construction/build-and-test/U2-orb-server-build-and-test.md`.
+- [x] **Build & Test (EN VIVO) — CERRADO OK (2026-07-13)**. El usuario validó el turno de voz completo por
+  las **3 vías** (texto, wake "hey saga", **Win+Z**): graban, procesan y responden por voz. **4 bugs de
+  integración cazados y corregidos durante el gate C1** (ninguno lo agarraba la suite estática): (1) `/vendor/*`
+  pedía token → three.js muerto (los ES modules no mandan headers) → exento; (2) 401 al refrescar (replaceState)
+  → token queda en la URL; (3) desync del token → rotar solo en `stop`; (4) `__orbFetch` definido tras un `await`
+  en el módulo de three.js → movido a `<script>` plano (verificado con Playwright: token OK → room CONNECTED).
+  **Win+Z NO era de saga/U2**: binding de Hyprland perdido en una update de los dots de KooL → repuesto en
+  `~/.config/hypr/UserConfigs/UserKeybinds.conf` (skill kool-hyprland). Verif final: pytest 45p/2xf · thorough
+  26p · ruff/mypy limpios · diff = solo 7 archivos de U2. Deuda menor: favicon.ico 401 (cosmético).
+- [x] **CÓDIGO VALIDADO Y APROBADO POR EL USUARIO (2026-07-13)**: *"Doy por validado y aprobado el codigo"*.
+> **✅ U2 COMPLETA — todas las etapas del framework cerradas y validadas en vivo.** Pendiente operativo (git,
+> requiere OK explícito del usuario): commit + PR a main (un PR por unidad, Q1=A). Al mergear, el xfail S5 ya
+> des-marcado queda firme; el próximo es U3 (riesgo ALTO: modelo de permisos + la objeción abierta de la
+> confirmación por voz).
+- **Punto de coordinación C1** (crítico): orb.html ↔ orb_server ATÓMICO. Si el server exige token y el cliente
+  no lo manda, el orbe no conecta y saga queda muda. Se valida en vivo.
+- **Red que ya espera**: el xfail-strict `test_no_auth_by_default_is_the_hole` (S5) hará XPASS cuando FR3.1 cierre
+  el agujero → obliga a des-marcarlo. Tests de orb_server (routing, path traversal, /token) ya existen de U1.
+- [ ] Functional Design → [ ] NFR Requirements → [ ] Code Generation → [ ] Build&Test
 - [ ] U2 — Hardening orb_server (riesgo medio; C1: orb.html ↔ orb_server atómico)
 - [ ] U3 — Modelo de permisos (riesgo ALTO; gate G1 de latencia)
 - Por unidad: Functional Design (obligatorio PBT-01) + NFR Requirements (obligatorio PBT-09) + Code Gen + Build&Test
