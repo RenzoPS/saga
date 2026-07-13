@@ -126,6 +126,10 @@ def stop() -> int:
         except OSError as e:
             print(f"stop: no pude borrar {f}: {e}")
 
+    # token del orbe (U2): efimero por sesion -> se va con el stop. El proximo start genera uno nuevo.
+    from vc.config import reset_orb_token
+    reset_orb_token()
+
     left = _daemon_pids()
     left.update(_lk_agent_pids())
     left.update(_livekit_server_pids())
@@ -256,7 +260,13 @@ def _start_room() -> int:
     )
     from vc.desktop import ensure_monitor_open
     from vc.claudecli import prewarm_claude
-    from vc.orb import ensure_orb
+    from vc.orb import ensure_orb, orb_url_with_token
+
+    # Token del orbe (U2/FR3.1): NO lo reseteamos acá. La rotacion la hace `stop` (y restart = stop+start).
+    # Si resetearamos en `start` con el server del orbe ya vivo (start sin stop), el archivo tendria un
+    # token nuevo pero el server seguiria validando el viejo en memoria -> URL con token nuevo, server con
+    # el viejo = 401. Dejando la rotacion en `stop`, el archivo y el server SIEMPRE quedan sincronizados:
+    # tras un stop limpio el archivo no existe y orb_token() genera uno fresco que el server recibe por env.
 
     dg = _has_deepgram()
     print("=" * 60)
@@ -337,14 +347,17 @@ def _start_room() -> int:
     # 5) abrir el browser cliente -> se une al room "saga" -> lo CREA -> el server AUTO-despacha el
     # worker -> entry() corre -> crea el socket de control. El browser es el trigger natural del room
     # (sin cliente no hay sesión, que es lo correcto). Por eso el wait del socket va DESPUÉS de abrirlo.
+    # El token viaja UNA vez por la URL de bootstrap (U2): la pagina lo guarda en memoria y lo saca
+    # de la barra con replaceState. Sin ?token=, el server responde 401 y el orbe no conecta.
+    orb_url = orb_url_with_token()
     try:
         subprocess.Popen(
-            ["xdg-open", ORB_URL], stdin=subprocess.DEVNULL,
+            ["xdg-open", orb_url], stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
-        print(f"start: abriendo el orbe -> {ORB_URL}")
+        print(f"start: abriendo el orbe -> {ORB_URL}")     # sin el token: no lo imprimimos en consola
     except OSError:
-        print(f"start: abrí el orbe a mano -> {ORB_URL}")
+        print(f"start: abrí el orbe a mano -> {orb_url}")  # a mano SI lo necesita
 
     # 6) readiness REAL del agente: esperar a que el socket de control RESPONDA = el agente entró al
     # room (vía el browser) y corrió entry(). Es la confirmación de que Win+Z va a andar.

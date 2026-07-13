@@ -1191,3 +1191,85 @@ U7.2+CI+workflow, rama feature 0 commits de diferencia. Ciclo 4 CERRADO Y MERGEA
 **Context**: CONSTRUCTION Ciclo 9 / U1 CERRADA Y VALIDADA EN VIVO. GATE de git (commit/PR) pendiente de OK explícito. Tras el merge → U2 (hardening orb_server).
 
 ---
+
+### Ciclo 9 / U1 — MERGEADA A MAIN + arranque de U2 (2026-07-13)
+**Timestamp**: 2026-07-13T16:35:00Z
+**User Input**: "Entonces mandale la opcion 1 q me habias dado: commit, push, pr" → "Dale, mandale la 1" (mergear PR #5 + arrancar U2 sobre main) → "Mergeala vos con el mcp de github"
+**AI Response**: "Ejecutado el flujo de git completo con OK explícito del usuario, paso a paso: (1) commit `ec8e4ee` (28 archivos); (2) push a origin/feature/security-testing-workflow; (3) PR #5 creada (feature/security-testing-workflow → main). Aclaración importante que el usuario pidió confirmar ANTES de commitear: NO fue 'solo tests' — hubo 1 cambio de LÓGICA real (F1: guardia contra no-lista en config.py, el parser ya no crashea), 1 de tipado sin efecto en runtime (F2), y bump de deps (F4); el resto es tests/CI/docs. El usuario lo entendió y aprobó. (4) Merge de PR #5: el MCP merge_pull_request fue bloqueado primero por el clasificador de auto-mode y `gh` no está instalado; NO forcé con push directo a main (habría sido rodear la intención del bloqueo). El usuario pidió explícitamente reintentar por el MCP → merge OK (squash, sha 40dde9c). (5) Sincronizado main local (ff-only), borrada la rama de U1 (remoto + local), creada `feature/ciclo9-u2-orb-server` desde main limpio. **U1 100% cerrada e integrada.** Siguiente: CONSTRUCTION de U2 (hardening orb_server, FR3), con el punto de coordinación crítico C1 (orb.html ↔ orb_server atómico) y la red de U1 esperando (xfail S5 hará XPASS al cerrar la auth)."
+**Context**: CONSTRUCTION Ciclo 9 — U1 MERGEADA A MAIN (PR #5, squash 40dde9c). U2 arrancando en rama feature/ciclo9-u2-orb-server. Siguiente stage: Functional Design de U2 (o su evaluación).
+
+---
+### Ciclo 9 / U2 — Functional Design Part 1 (plan + preguntas) (2026-07-13)
+**Timestamp**: 2026-07-13T17:15:00Z
+**User Input**: "Using AI-DLC, arrancamos con U2, e2e siguiendo el workflow del framework"
+**AI Response**: "Arrancada la CONSTRUCTION de U2 (Hardening de orb_server) sobre la rama feature/ciclo9-u2-orb-server. Cargadas las reglas del framework (.aidlc-rule-details/) + las 2 extensiones BLOQUEANTES activas (security/baseline + testing/property-based; resiliency OFF). Stage actual = Functional Design (obligatorio por PBT-01). Part 1 HECHO: plan `construction/plans/U2-orb-server-functional-design-plan.md` con el mapeo de la superficie HTTP leído del código (no de memoria) + 7 preguntas embebidas [Answer]: (Q1 transporte del token / Q2 rutas con auth / Q3 ciclo de vida del ORB_TOKEN / Q4 CSP con nonce vs unsafe-inline / Q5 límites de tamaño / Q6 rate limit de /say / Q7 TTL del JWT). Hallazgo confirmado en el código: `TOKEN=os.environ.get('ORB_TOKEN','')` + `_authorized()` devuelve True con TOKEN vacío → HOY no hay auth en ninguna ruta; cualquier página abierta en el browser puede hacer POST /say a 127.0.0.1:8777 y disparar un turno de Claude en god-mode (CSRF → ejecución). Esperando respuestas del usuario antes de generar los artefactos (Paso 5)."
+**Context**: CONSTRUCTION Ciclo 9 / U2 — Functional Design Part 1 (plan + preguntas). GATE: esperando respuestas del usuario.
+
+---
+
+## U2 — Functional Design (Paso 4: recolección de respuestas)
+**Timestamp**: 2026-07-13T15:45:00Z
+**User Input**: "Using AI-DLC, arrancamos con u2 de seguridad y testing porfavor, quiero q sigas el workflow del framework e2e pls"
+**AI Response**: "Retomo U2 en el punto exacto donde quedó: Functional Design Part 1 completo (plan + 7 preguntas). Paso 4 = recolectar respuestas del usuario antes de generar artefactos. Presento Q1-Q7 al usuario."
+**Context**: CONSTRUCTION / U2 — Hardening de orb_server / Functional Design / Paso 4. Sin ambigüedad detectada en el request; se retoma el workflow e2e sin re-ejecutar Inception (Ciclo 9 Inception CERRADA).
+
+---
+
+## U2 — Investigación del estándar de industria (fuera del framework, por pedido del usuario)
+**Timestamp**: 2026-07-13T15:58:00Z
+**User Input**: "Ok, quiero q antes de prosguir investigues en la web el estandar de seguridad para una ia agentica por voz para ver cuales son los patrones mas UTILIZADOS. Esto lo tendriamos q haber hecho antes mepa, pero bueno porque no quiero quejar codemos cosas, ¿viste? Ahora mismo estamos intentando tirar ideas de lo que podemos hacer, lo que no, si usar cookies, si no, y cómo tener de estándar de seguridad, pero seguramente en la industria ya haya un estándar, ¿entendés? o unos patrones correctos para estos este tipo de aplicaciones, y más porque hoy en día están muy en auje. Así que te invito a que investigues el tema y, bueno, y propongas nuevamente usando el flujo del framework AI-DLC ya sea actualizada en el plan, los requirements, el insection, ¿bien? Pero te lo dejo a vos. U1 quedo, era testing, ahora con U2 estamos hablando de seguridad, quizas tengas q actualizarlo luego de la investigacion. Te lo encargo, esta investigaciones al margen del framework, pero luego quiero que lo sigas end to end porfavor, no saltees nada del flujo del mismo."
+**AI Response**: "Investigación ejecutada (2 agentes en paralelo, fuentes primarias: OWASP, NCC Group, MDN/WHATWG, docs oficiales de LiveKit/Jupyter/Ollama/Syncthing/Anthropic/OpenAI). Artefacto: inception/requirements/ciclo9-security-research.md. La investigación INVALIDÓ la v1 del plan de Functional Design de U2 (sus 7 preguntas eran falsas disyuntivas) y corrigió un supuesto FALSO sobre el TTL del JWT. Se actualizó Inception (requirements: FR3.1-FR3.6 precisados + FR3.7-FR3.10 NUEVOS), se reescribió el plan de U2 a v2 con decisiones D1-D8 derivadas de la evidencia, y se registró una objeción abierta para U3 (la confirmación hablada es inyectable por el mismo canal del ataque). Gate: aprobación del usuario de D1-D8 antes del Paso 5 (generación de artefactos)."
+**Context**: CONSTRUCTION / U2 / Functional Design / Paso 3.5 (investigación, fuera del framework) + actualización de INCEPTION (Requirements Analysis) + Paso 4 (aprobación) PENDIENTE.
+**Hallazgos que cambiaron el diseño**:
+  - Precedente exacto de orb_server = Ollama / CVE-2024-28224 (exfiltración de archivos vía DNS rebinding en un server local de LLM sin auth). Estado actual del código, no teórico.
+  - El estándar es MULTICAPA (no "cookie o token o header"): Token → proceso local; Host check → DNS rebinding (el Origin NO sirve: bajo rebinding el atacante ES same-origin); header custom con secreto → fuerza preflight CORS → mata CSRF web.
+  - Sec-Fetch-Site cubre el hueco de GET/SSE (donde Origin no viene en same-origin). No estaba en los requirements.
+  - SUPUESTO FALSO CORREGIDO: doc oficial de LiveKit — "Expiration time only impacts the initial connection, and not subsequent reconnects". El TTL corto NO rompe reconexiones; el TTL NO limita la sesión; self-hosted no tiene revocación → el TTL corto ES la única red.
+  - Gap no visto: grants del JWT heredan los defaults del SDK (FR3.9) e identity/room vienen del query sin validar y SE FIRMAN en el JWT (FR3.10).
+  - Para U3: la confirmación HABLADA es inyectable por el mismo canal del ataque. Anthropic mide ~93% de permission prompts aprobados sin leerlos (OWASP ASI09).
+
+---
+
+## U2 — Recorte por proporcionalidad + flujo e2e completo (estático)
+**Timestamp**: 2026-07-13T16:25:00Z
+**User Input**: "Ok para, muchas cosas, la idea era ver el standard, cosas como las q recomienda livekit para nivel seguridad en local o assembly entendes? A ese nivel me refiero, tampoco armar algo TAN COMPLEJO, es LOCAL, cuanta seguridad vas a querer en la web LOCAL??" [seguido de] "Using AI-DLC; TE LO ENCARGO AL 100% RECORDA Q EL RENDIMIENTO ES CRUCIAL AL IGUAL Q LA SEGURIDAD, pero esta ultima no deberia ser tan complicada xq como te digo, ES LOCAL"
+**AI Response**: "Reconocido el sobre-diseño de la v2. Recorte por proporcionalidad: se descartan explícitamente (con su porqué, en requirements §FR3-OUT) rate limit, cookie, CSP con nonce, Sec-Fetch-Site y validación de Origin — todos protegían contra atacantes que no existen en un equipo local monousuario o cuya única víctima potencial era el propio usuario. FR3 pasa de 10 a 7 requisitos. Plan v3. Delegación al 100% tomada: decidí CSP acotada (no puede romper el WebRTC) + token efímero por arranque. Ejecuté el flujo e2e completo del framework: Functional Design (3 artefactos + 6 propiedades PBT) → NFR Requirements → Code Generation (plan + código, 7 archivos) → Build&Test estático. Estático CERRADO: 43 passed/2 xfailed, thorough 24p, ruff+mypy limpios, curl real OK. Bug real cazado por U2-P6 (compare_digest crasheaba con Unicode → fail-closed). Pendiente: validación en vivo del usuario (C1 + gate NFR1)."
+**Context**: CONSTRUCTION / U2 — Functional Design + NFR Requirements + Code Generation + Build&Test (estático) COMPLETOS. Único pendiente: validación en vivo (turno de voz, C1) + gate de latencia NFR1.
+**Decisiones clave**:
+  - Recorte: solo lo que tapa un atacante REAL (pestaña maliciosa → token+CORS+form-action; DNS rebinding → Host check). Todo lo demás descartado con registro explícito en §FR3-OUT (no es olvido).
+  - Token: 3 procesos lo necesitan (server/browser/agente) → archivo de runtime 0600 en XDG_RUNTIME_DIR, efímero por arranque (patrón Jupyter).
+  - CSP acotada a frame-ancestors/form-action/base-uri 'none': NO toca script-src/connect-src → imposible que rompa el WebRTC (C1).
+  - NFR1: el hot path del turno no pasa por HTTP salvo POST /state; la puerta agrega microsegundos. Gate en vivo pendiente.
+**Hallazgo**: U2-P6 (property-based) cazó un bug real de robustez: hmac.compare_digest lanza TypeError con strings no-ASCII → un token Unicode por ?token= crasheaba el handler (fail-open). Corregido a fail-closed (try/except → False). Un test de ejemplo no lo hubiera encontrado.
+
+---
+
+## U2 — Validación en vivo #1: bug C1 encontrado y corregido (assets /vendor)
+**Timestamp**: 2026-07-13T17:52:00Z
+**User Input**: [captura del browser] orbe muestra "No cargó WebGL/Three.js. Verificá conexión y recargá." con el token todavía en la URL.
+**AI Response**: "Diagnóstico: los assets de /vendor/* (three.js + SDK LiveKit) se cargan por import de ES modules, que NO pueden mandar el header X-Orb-Token. Mi deny-by-default sobre /vendor/* los devolvía 401 → three.js no cargaba → WebGL muerto. Además el módulo tiraba en el primer import y nunca llegaba al history.replaceState (por eso el token seguía en la URL). Una sola causa raíz. Fix: /vendor/* exento del token (assets sin secretos), siguiendo detrás del Host check + traversal bloqueado. Es el patrón del estándar (assets públicos). Verificado con curl: vendor sin token 200, rebinding sobre vendor 403, /say y /token siguen 401. Tests: 17 passed, ruff limpio. Docs actualizados (business-rules BR-1)."
+**Context**: CONSTRUCTION / U2 / Build&Test — validación en vivo, iteración 1. Bug C1 (el riesgo #1 del plan) se materializó y se cerró. Falta re-probar en el browser.
+
+## U2 — Validación en vivo #2: token-en-URL refresh-safe + fix de desync
+**Timestamp**: 2026-07-13T17:57:00Z
+**User Input**: [captura] pestaña en 127.0.0.1:8777 (URL pelada, sin token) -> "Error code: 401, token invalido o ausente".
+**AI Response**: "Dos problemas de UX del token efímero, ambos corregidos: (1) el history.replaceState limpiaba el token de la URL -> un F5 re-pedía / sin token -> 401 en cada refresh. Fix: dejar el token en la URL (local: no se filtra, Referrer-Policy no-referrer ya cubre). (2) Desync latente: reset_orb_token() corría en _start_room, pero si el orb server sobrevivía (start sin stop) el server validaba el token viejo mientras el archivo tenía uno nuevo -> 401. Fix: la rotación la hace SOLO stop (restart = stop+start), así archivo y server nunca se desincronizan. Verificado: /?token=T 200, refresh 200, / sin token 401 (deny-by-default intacto). Suite verde, ruff limpio."
+**Context**: CONSTRUCTION / U2 / Build&Test — validación en vivo, iteración 2. Falta re-probar con saga-ctl restart (limpio).
+
+## U2 — Validación en vivo #3: BUG REAL (module ordering) encontrado y verificado con browser
+**Timestamp**: 2026-07-13T18:06:00Z
+**User Input**: "el orbe carga se ve la pantalla, todo lo del token que vos dijiste, pero ni con Win más Z, ni con hey saga, ni escribiendo en el chat, ni nada procesa absolutamente nada."
+**AI Response**: "Diagnóstico por evidencia: el socket de control del agente NO existía -> el browser nunca se unió al room. Causa raíz: definí window.__orbFetch DENTRO del <script type=module> de three.js, DESPUÉS del top-level `await import('three')` -> el módulo se suspende ahí y __orbFetch se define tarde; el módulo de LiveKit ya había llamado a window.__orbFetch('/token') cuando aún era undefined -> throw 'no se pudo pedir el token' -> sin conexión al room -> sin agente -> nada procesa. Los 3 inputs (Win+Z/wake/texto) terminan en el agente, por eso los 3 fallaban. Fix: mover el token + __orbFetch a un <script> PLANO (sincrónico) antes de los módulos -> existe antes de que cualquier módulo corra. VERIFICADO CON BROWSER REAL (Playwright): consola muestra 'token OK', 'room CONNECTED' (room: saga, participant: saga-client), 'TTS track attached', 'mic publicado'; el socket de control AHORA EXISTE y el worker recibió un job. Único error residual: favicon.ico 401 (cosmético, inofensivo). Suite 45p/2xf."
+**Context**: CONSTRUCTION / U2 / Build&Test — validación en vivo, iteración 3. Bug de ordering de módulos (introducido por el cambio de fetch->__orbFetch) corregido y verificado empíricamente con el browser. Falta la confirmación final del usuario (turno de voz real + latencia).
+
+## U2 — Validación en vivo #4: Win+Z NO era de saga (binding de Hyprland perdido)
+**Timestamp**: 2026-07-13T18:15:00Z
+**User Input**: "el win + z no lo decta" / [tras cold start] "el win + z no lo decta" / "dale, agregala y hacé el reload"
+**AI Response**: "Diagnóstico por evidencia: mandé 'press' directo al socket de control -> el agente respondió 'ok' y grabó (log: 'Win+Z -> GRABANDO'). Corrí saga.py a mano desde cwd arbitrario -> emitió 'press', exit 0. O sea: emisor + socket + agente andan 100%. La causa: `hyprctl binds` mostró CERO binds de la tecla Z cargados, y no hay ninguna mención de saga en ~/.config/hypr. El binding se perdió (lo pisó una update de los dots de KooL). NO es un bug de U2 ni del código de saga (el path de Win+Z no toca el token ni el HTTP). Fix (con OK del usuario): agregué `bindd = $mainMod, Z, Saga push-to-talk, exec, <venv python> saga.py` a ~/.config/hypr/UserConfigs/UserKeybinds.conf (archivo de user-override que sobrevive updates) + hyprctl reload. Verificado: hyprctl binds ahora muestra el bind cargado (mods=64=SUPER, key=Z), sin configerrors. Se usó la skill kool-hyprland para ubicar el archivo correcto del sistema dual .conf/.lua."
+**Context**: CONSTRUCTION / U2 / Build&Test — validación en vivo, iteración 4. Win+Z resuelto como problema de ENTORNO (dotfiles), no de código. Texto y wake ya andaban; con el bind repuesto, los 3 inputs quedan operativos.
+
+## U2 — Código validado y aprobado por el usuario / U2 COMPLETA
+**Timestamp**: 2026-07-13T18:25:00Z
+**User Input**: "Using AI-DLC, siguiendo el workflow del framework e2e: probado, win + z anda perfectamente y sin ningun inconveniente. Excelente trabajo, que queda para finalizar U2? Doy por validado y aprobado el codigo"
+**AI Response**: "U2 completa. Todas las etapas del framework cerradas: Functional Design ✅, NFR Requirements ✅, Code Generation (Part 1+2) ✅ APROBADO, Build&Test estático + EN VIVO ✅. Validación en vivo cerró las 3 vías (texto/wake/Win+Z). 4 bugs de integración cazados y corregidos en el gate C1. Win+Z era binding de Hyprland perdido (entorno, no código). Verif final: pytest 45p/2xf, thorough 26p, ruff/mypy limpios, diff = solo 7 archivos de U2. Único pendiente OPERATIVO (requiere OK explícito de git): commit + PR a main (un PR por unidad). Próximo: U3 (riesgo ALTO)."
+**Context**: CONSTRUCTION / U2 — CERRADA. Código aprobado por el usuario. Pendiente: merge (git, requiere confirmación explícita).

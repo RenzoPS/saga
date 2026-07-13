@@ -22,6 +22,7 @@ import os
 import sys
 import json
 import time
+import hmac
 import queue
 import base64
 import socket
@@ -36,12 +37,44 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 from vc.config import (
-    ATTACH_IMG_PATH, LK_CTL_SOCK,
+    ATTACH_IMG_PATH, LK_CTL_SOCK, orb_token,
     LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_ROOM,
 )
 
 PORT = int(os.environ.get("ORB_PORT", "8777"))
-TOKEN = os.environ.get("ORB_TOKEN", "")          # vacio = sin auth (local)
+# U2/FR3.1: el token NO puede quedar vacio. Antes: `os.environ.get("ORB_TOKEN", "")` + `if not TOKEN:
+# return True` = CERO auth (agujero S5, el mismo patron del CVE-2024-28224 de Ollama). Ahora: si el
+# env no lo trae, lo tomamos del archivo de runtime (vc.config.orb_token, fuente unica de los 3 procesos).
+TOKEN = os.environ.get("ORB_TOKEN", "").strip() or orb_token()
+
+# U2/FR3.7 — anti-DNS-rebinding: allowlist EXACTA del header Host. Bajo rebinding el atacante es
+# same-origin (el browser le manda el token igual), asi que ninguna otra capa lo detecta: este check
+# es LA defensa. Match exacto y nada de substrings: `"127.0.0.1" in host` deja pasar 127.0.0.1.evil.com.
+# El puerto permitido es el REAL al que el server esta atado (self.server.server_address), no el del
+# env: asi el check es correcto en produccion (8777) y en un server de test bindeado a un puerto libre.
+_LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "[::1]")
+
+
+def _allowed_hosts(port: int) -> frozenset:
+    return frozenset(f"{h}:{port}" for h in _LOOPBACK_HOSTS)
+
+# U2/FR3.4 — tope de body por ruta. /attach escribe a /tmp, que es tmpfs = RAM: sin cap, un body de
+# varios GB te come la RAM. El limite se chequea ANTES de leer (413 sin tocar RAM ni disco).
+MAX_BODY = 8 * 1024                                # default de los POST
+LIMITS = {"/attach": 10 * 1024 * 1024,             # imagen: un PNG full-HD ronda 1-3 MB
+          "/say": 64 * 1024, "/stage": 64 * 1024}  # texto: 64 KB ~ 10.000 palabras
+
+# U2/FR3.3 — headers de seguridad. La CSP es deliberadamente ACOTADA: NO toca script-src ni
+# connect-src (restringirlos obligaria a enumerar el WS de LiveKit y romperia el WebRTC -> saga muda).
+# form-action 'none' es el que mas compra: mata el POST por <form>, el unico CSRF que el header
+# custom no puede frenar (un <form> no setea headers, pero tampoco dispara preflight -> llegaria igual).
+SECURITY_HEADERS = (
+    ("X-Content-Type-Options", "nosniff"),
+    ("X-Frame-Options", "DENY"),
+    ("Referrer-Policy", "no-referrer"),            # que el ?token= no se filtre por el Referer
+    ("Content-Security-Policy", "frame-ancestors 'none'; form-action 'none'; base-uri 'none'"),
+)
+JWT_TTL = 300.0                                    # 5 min: solo tiene que cubrir el JOIN (ver _serve_token)
 # Wake (U4): el cliente lee este flag del /token para decidir si publica el mic DESMUTEADO siempre
 # (wake ON: el server necesita oír "hey saga") o gateado por estado (wake OFF, default). OJO:
 # bool("0") es True -> comparar el valor real, no bool() sobre el env crudo.
@@ -107,20 +140,66 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def _authorized(self) -> bool:
-        if not TOKEN:
+        """Token valido? Header X-Orb-Token (los fetch) o ?token= (bootstrap y SSE).
+
+        El query param NO es una eleccion de diseño: EventSource NO acepta headers custom (limitacion
+        del browser), asi que /events no tiene otra via. compare_digest = comparacion en tiempo
+        constante (`==` corta en el primer byte distinto -> timing leak)."""
+        sent = self.headers.get("X-Orb-Token")
+        if not sent:
+            sent = (parse_qs(urlparse(self.path).query).get("token") or [""])[0]
+        # compare_digest tira TypeError con strings no-ASCII -> lo tratamos como token invalido
+        # (fail-closed): un token real es token_urlsafe (ASCII), asi que no-ASCII nunca es legitimo.
+        try:
+            return hmac.compare_digest(sent, TOKEN)
+        except TypeError:
+            return False
+
+    def _gate(self) -> bool:
+        """Puerta UNICA: corre antes de CUALQUIER handler, en GET y en POST. Fail-closed.
+
+        Antes, `_authorized()` se llamaba SOLO en do_POST -> /token (que mintea el JWT) y /events
+        quedaban abiertos incluso con token configurado. Una auth opt-in por ruta garantiza que el
+        proximo endpoint nazca inseguro; por eso la validacion vive en un solo lugar.
+
+        Orden (importa): Host -> healthz -> token -> tamaño. El Host va PRIMERO porque bajo DNS
+        rebinding el atacante es same-origin y trae el token: ninguna capa posterior lo detectaria.
+        Devuelve True si el request puede seguir; si devuelve False, ya respondio el error.
+        """
+        addr = self.server.server_address                      # (host, port) en TCP
+        bound_port = addr[1] if isinstance(addr, tuple) else PORT
+        if self.headers.get("Host") not in _allowed_hosts(bound_port):   # FR3.7 (match exacto)
+            self.send_error(403, "host no permitido")
+            return False
+        path = urlparse(self.path).path
+        # Exentas del token (NO del Host check, que ya paso): /healthz (probe de readiness) y /vendor/*
+        # (three.js + SDK de LiveKit, assets estaticos SIN secretos). Los assets se cargan por <script
+        # src>/import de ES modules, que NO pueden mandar el header X-Orb-Token -> exigirlo dejaba la
+        # pagina sin three.js (WebGL muerto). El path traversal de /vendor ya esta bloqueado aparte.
+        if path == "/healthz" or path.startswith("/vendor/"):
             return True
-        qs = parse_qs(urlparse(self.path).query)
-        return (qs.get("token") or [""])[0] == TOKEN
+        if not self._authorized():                             # FR3.1 (deny by default)
+            self.send_error(401, "token invalido o ausente")
+            return False
+        if self.command == "POST":                             # FR3.4 (limite ANTES de leer el body)
+            if int(self.headers.get("Content-Length") or 0) > LIMITS.get(path, MAX_BODY):
+                self.send_error(413, "body demasiado grande")
+                return False
+        return True
 
     def _send_bytes(self, data: bytes, ctype: str, code: int = 200):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
+        for k, v in SECURITY_HEADERS:
+            self.send_header(k, v)
         self.end_headers()
         self.wfile.write(data)
 
     def do_GET(self):
+        if not self._gate():
+            return
         path = urlparse(self.path).path
         if path in ("/", "/index.html"):
             try:
@@ -140,22 +219,39 @@ class Handler(BaseHTTPRequestHandler):
         self.send_error(404)
 
     def _serve_token(self):
-        """Emite el JWT del cliente para unirse al room. GET /token?identity=&room=.
+        """Emite el JWT del cliente para unirse al room. GET /token.
         Mintea con livekit.api (import lazy: solo /token la necesita).
         Respuesta: {"url": "ws://127.0.0.1:7880", "token": "<jwt>", "room": "saga", "wake": <bool>}.
-        `wake` (U4): si true, el cliente publica el mic DESMUTEADO siempre (el server oye "hey saga")."""
+        `wake` (U4): si true, el cliente publica el mic DESMUTEADO siempre (el server oye "hey saga").
+
+        U2/FR3.6: `identity` y `room` los fija el SERVER. Antes salian del QUERY del cliente y se
+        FIRMABAN en el JWT -> el cliente elegia en que room entrar y con que identidad (S8).
+
+        U2/FR3.5: TTL explicito (5 min) + grants minimos. El default del SDK son 6h y grants abiertos.
+        El TTL corto es seguro: la doc oficial de LiveKit dice que "expiration time only impacts the
+        initial connection, and not subsequent reconnects" (el server empuja tokens refrescados por el
+        signal channel) -> un TTL corto NO rompe reconexiones. Y como el self-hosted NO tiene revocacion
+        (es Cloud-only), el TTL corto es la UNICA red si el JWT se filtra.
+        """
         if not LIVEKIT_API_KEY or not LIVEKIT_API_SECRET:
             self.send_error(500, "LIVEKIT_API_KEY/SECRET sin configurar (.env.local)")
             return
-        qs = parse_qs(urlparse(self.path).query)
-        identity = (qs.get("identity") or ["saga-client"])[0]
-        room = (qs.get("room") or [LIVEKIT_ROOM])[0]
         try:
+            from datetime import timedelta
             from livekit import api  # lazy: única dep pip del módulo
             token = (
                 api.AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
-                .with_identity(identity)
-                .with_grants(api.VideoGrants(room_join=True, room=room))
+                .with_identity("saga-client")            # del SERVER, no del query (FR3.6)
+                .with_ttl(timedelta(seconds=JWT_TTL))    # FR3.5: 5 min (default del SDK: 6h)
+                .with_grants(api.VideoGrants(
+                    room_join=True,
+                    room=LIVEKIT_ROOM,                   # del SERVER, no del query (FR3.6)
+                    can_subscribe=True,                  # escucha el track TTS del worker
+                    can_publish=True,
+                    can_publish_sources=["microphone"],  # SOLO el mic: ni camara ni screenshare
+                    can_publish_data=False,
+                    can_update_own_metadata=False,
+                ))
                 # El token es SOLO para unirse al room. El dispatch del agente es AUTOMÁTICO nativo (U8):
                 # al unirse el browser, crea el room "saga" y el server despacha el worker solo. El token
                 # no despacha ni trae RoomConfiguration.
@@ -165,7 +261,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(500, f"no se pudo emitir el token: {e}")
             return
         body = json.dumps(
-            {"url": LIVEKIT_URL, "token": token, "room": room, "wake": WAKE_ENABLED}
+            {"url": LIVEKIT_URL, "token": token, "room": LIVEKIT_ROOM, "wake": WAKE_ENABLED}
         ).encode()
         self._send_bytes(body, "application/json")
 
@@ -181,11 +277,16 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
 
     def _serve_events(self):
+        # U2/FR3.2: se fue el `Access-Control-Allow-Origin: *`. Mandarlo INVITABA a cualquier pagina
+        # abierta a leer el estado de saga en vivo. Sin headers CORS, el browser no deja leer la
+        # respuesta cross-origin, y el preflight que fuerza X-Orb-Token pasa a ser una defensa real.
+        # El token de /events viaja por ?token= (el SSE no acepta headers custom) y ya lo valido _gate().
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "keep-alive")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        for k, v in SECURITY_HEADERS:
+            self.send_header(k, v)
         self.end_headers()
         q: queue.Queue = queue.Queue(maxsize=64)
         with _lock:
@@ -213,10 +314,9 @@ class Handler(BaseHTTPRequestHandler):
                 _clients.discard(q)
 
     def do_POST(self):
-        parsed = urlparse(self.path)
-        if not self._authorized():
-            self.send_error(403)
+        if not self._gate():          # host + token + LIMITE DE TAMAÑO, antes de leer un solo byte
             return
+        parsed = urlparse(self.path)
         ln = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(ln) if ln else b""     # leemos el body (lo usa /attach)
         if parsed.path == "/state":
@@ -280,7 +380,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _ok204(self):
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        for k, v in SECURITY_HEADERS:   # U2/FR3.2: se fue el `Access-Control-Allow-Origin: *`
+            self.send_header(k, v)
         self.end_headers()
 
 

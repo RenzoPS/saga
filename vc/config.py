@@ -3,6 +3,7 @@
 import os
 import re
 import json
+import secrets
 from pathlib import Path
 
 HOME = Path.home()
@@ -234,6 +235,41 @@ ORB_DIR = PROJECT_DIR / "orb"
 ORB_PORT = int(os.environ.get("ORB_PORT", "8777"))
 ORB_URL = f"http://127.0.0.1:{ORB_PORT}/"
 ORB_SERVER = ORB_DIR / "orb_server.py"
+
+# --- Token del orbe (U2, FR3.1) --------------------------------------------------------------
+# El token lo necesitan TRES procesos distintos: orb_server (lo valida), el browser (lo manda en
+# los fetch/SSE) y el AGENTE (vc/orb.py hace POST /state en cada transicion, desde otro proceso).
+# Un token en memoria no le llega a los tres -> archivo de runtime, 0600, en XDG_RUNTIME_DIR
+# (/run/user/<uid>: tmpfs y 0700 -> no toca el disco y muere con la sesion del usuario).
+# Es el patron del runtime dir de Jupyter. Se ROTA en cada `saga-ctl start` (efimero por arranque).
+_RUNTIME_DIR = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/tmp/saga-{os.getuid()}")
+ORB_TOKEN_FILE = _RUNTIME_DIR / "saga" / "orb-token"
+
+
+def orb_token() -> str:
+    """Token del orbe. Lo lee del archivo de runtime; si no existe, lo crea (0600).
+
+    Race-safe: la creacion es O_CREAT|O_EXCL -> si otro proceso gano la carrera, releemos el suyo.
+    NUNCA devuelve vacio: un token vacio significaria "sin auth", que es justo el agujero (S5).
+    """
+    try:
+        return ORB_TOKEN_FILE.read_text().strip()
+    except OSError:
+        pass
+    ORB_TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    token = secrets.token_urlsafe(32)
+    try:
+        fd = os.open(ORB_TOKEN_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        return ORB_TOKEN_FILE.read_text().strip()   # otro proceso lo creo entre medio -> usamos el suyo
+    with os.fdopen(fd, "w") as f:
+        f.write(token)
+    return token
+
+
+def reset_orb_token() -> None:
+    """Borra el token -> el proximo `orb_token()` genera uno nuevo. Lo llama saga-ctl start/stop."""
+    ORB_TOKEN_FILE.unlink(missing_ok=True)
 
 SESSION_FILE = PROJECT_DIR / "session.json"
 
