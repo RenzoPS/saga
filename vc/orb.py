@@ -11,11 +11,18 @@ import http.client
 import urllib.request
 import subprocess
 
-from .config import ORB_URL, ORB_PORT, ORB_SERVER
+from .config import ORB_URL, ORB_PORT, ORB_SERVER, orb_token
 from .runtime import log
 
 
+def orb_url_with_token() -> str:
+    """URL de bootstrap del orbe. El token viaja UNA vez por la URL (el browser no tiene otra via
+    de arranque); la pagina lo guarda en memoria y lo saca de la barra con history.replaceState."""
+    return f"{ORB_URL}?token={orb_token()}"
+
+
 def _orb_up() -> bool:
+    # /healthz es la UNICA ruta exenta de token (U2): es el probe de readiness, no expone nada.
     try:
         urllib.request.urlopen(ORB_URL + "healthz", timeout=0.4)
         return True
@@ -36,7 +43,9 @@ def ensure_orb(open_browser: bool = True) -> None:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
-            env={**os.environ, "ORB_PORT": str(ORB_PORT)},
+            # ORB_TOKEN (U2): el server lo toma del env; si no viniera, lo leeria del mismo archivo
+            # de runtime (vc.config.orb_token) -> mismo token igual. Lo pasamos explicito por claridad.
+            env={**os.environ, "ORB_PORT": str(ORB_PORT), "ORB_TOKEN": orb_token()},
         )
     except OSError as e:
         log(f"orb spawn fail: {e}")
@@ -50,7 +59,7 @@ def ensure_orb(open_browser: bool = True) -> None:
     # server recien levantado -> abrir pestaña una vez
     try:
         subprocess.Popen(
-            ["xdg-open", ORB_URL],
+            ["xdg-open", orb_url_with_token()],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
@@ -88,11 +97,15 @@ class _OrbClient:
             pass
 
     def _post(self, path: str) -> None:
+        # U2: el server exige token en TODO endpoint. Este POST corre DENTRO del worker (otro proceso),
+        # asi que el token sale del archivo de runtime (fuente unica). Sin el header -> 401 y el orbe
+        # se quedaria clavado en idle.
+        headers = {"X-Orb-Token": orb_token()}
         for attempt in (1, 2):
             try:
                 if self._conn is None:
                     self._conn = http.client.HTTPConnection("127.0.0.1", ORB_PORT, timeout=0.5)
-                self._conn.request("POST", path, body=b"")
+                self._conn.request("POST", path, body=b"", headers=headers)
                 self._conn.getresponse().read()
                 if not self._post_ok:
                     log("orb reconectado (POST OK de nuevo)")

@@ -115,6 +115,29 @@ def benign_commands(draw):
 _utf8_text = st.text(alphabet=st.characters(codec="utf-8"), max_size=128)
 
 
+# --- E2: Header Host adversarial (fuente: orb_server._gate, U2/FR3.7) ---
+# El bug clasico es el match por substring: `"127.0.0.1" in host` deja pasar 127.0.0.1.evil.com.
+# El generador produce justo esos hosts que un check ingenuo aceptaria pero la allowlist exacta NO.
+@st.composite
+def adversarial_hosts(draw, port):
+    """Hosts que NO deben pasar el check exacto, aunque contengan una substring loopback (P2)."""
+    p = port
+    templates = [
+        f"127.0.0.1.evil.com:{p}",       # substring al principio
+        f"evil.com:{p}",                 # nada que ver
+        f"127.0.0.1:{p}.evil.com",       # substring con el puerto adentro
+        f"localhost.evil.com:{p}",
+        f"127.0.0.1:{p + 1}",            # loopback pero PUERTO equivocado
+        f"127.0.0.1",                    # sin puerto
+        f"[::1]:{p}.evil.com",
+        f"0.0.0.0:{p}",
+        f"127.0.0.1:{p} ",               # trailing space
+        f"foo{p}bar",
+    ]
+    base = draw(st.sampled_from(templates))
+    return base
+
+
 @st.composite
 def socket_payloads(draw):
     """Bytes que viajan por el socket de control como base64. Incluye texto con \\n embebidos:
