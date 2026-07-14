@@ -10,10 +10,11 @@ Correr profundo:  HYPOTHESIS_PROFILE=thorough .venv/bin/pytest tests/test_proper
 import base64
 import json
 import os
+import re
+import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
@@ -120,30 +121,109 @@ class TestConfigRobustness:
 # P7 + P8 — Guard: bloquea lo catastrófico / NO bloquea lo legítimo
 # =========================================================================
 class TestGuard:
-    @pytest.mark.xfail(
-        reason="P7/Q3=A: la denylist regex actual es evadible por construcción. Hypothesis "
-        "encuentra bypasses (p.ej. 'rm -r -f /', flags separadas). Es el hallazgo esperado; "
-        "el endurecimiento del guard es U3 (FR2.2). Cuando U3 cierre los bypasses, pasa a verde.",
-        strict=True,
-    )
     @settings(max_examples=1000 if os.environ.get("HYPOTHESIS_PROFILE") == "thorough" else 200)
     @given(gen.catastrophic_commands())
     def test_p7_blocks_catastrophic(self, cmd):
-        """P7 (SEGURIDAD): un comando catastrófico debe ser bloqueado (denied != None).
+        """P7 / U3-P1 (SEGURIDAD): un comando catastrófico debe ser bloqueado, escrito COMO SEA.
 
-        ⚠️ SE ESPERA QUE ESTE TEST FALLE (Q3=A). La denylist actual es evadible: `rm -r -f`
-        (flags separadas) no matchea el regex `\\brm\\s+-[a-z]*r[a-z]*f`. El contraejemplo
-        que encuentre Hypothesis es un BYPASS REAL, input directo para U3 (endurecimiento
-        del guard). NO se arregla el guard acá: es territorio de U3.
+        Era xfail-strict en U1/U2: la denylist regex se evadía con `rm -r -f` (flags separadas).
+        U3 lo cerró parseando el comando (shlex + normalización de flags) -> el xfail se des-marcó.
+        Si este test vuelve a fallar, es que se reabrió un bypass.
         """
         label = guard.denied(cmd)
-        assert label is not None, f"BYPASS del guard (input para U3): {cmd!r} no fue bloqueado"
+        assert label is not None, f"BYPASS del guard: {cmd!r} no fue bloqueado"
 
     @given(gen.benign_commands())
     def test_p8_allows_benign(self, cmd):
-        """P8: un comando legítimo NO debe ser bloqueado. Un falso positivo = guard que
+        """P8 / U3-P2: un comando legítimo NO debe ser bloqueado. Un falso positivo = guard que
         se termina desactivando = sin guard."""
         assert guard.denied(cmd) is None, f"falso positivo del guard: {cmd!r} fue bloqueado"
+
+
+# =========================================================================
+# U3 — Modelo de permisos (Ciclo 9 / U3)
+# =========================================================================
+class TestGuardU3:
+    @settings(max_examples=1000 if os.environ.get("HYPOTHESIS_PROFILE") == "thorough" else 200)
+    @given(gen.git_bad_practice_commands())
+    def test_u3_p1_blocks_git_bad_practices(self, cmd):
+        """U3-P1 (BR-U3-4b): las MALAS PRÁCTICAS DE GIT se bloquean DURO, en cualquier variante.
+        Decisión explícita del usuario: no pasan por confirmación hablada; se hacen a mano."""
+        assert guard.denied(cmd) is not None, f"mala práctica de git NO bloqueada: {cmd!r}"
+
+    @settings(max_examples=1000 if os.environ.get("HYPOTHESIS_PROFILE") == "thorough" else 200)
+    @given(gen.equivalent_catastrophic_forms())
+    def test_u3_p5_flag_forms_are_equivalent(self, forms):
+        """U3-P5 (BR-U3-3): el veredicto NO puede depender de CÓMO se escribió el comando.
+        `rm -rf X` == `rm -r -f X` == `rm --recursive --force X`. Acá vivían los bypasses:
+        el regex miraba el string, no la semántica."""
+        verdicts = [guard.denied(f) for f in forms]
+        assert all(v is not None for v in verdicts), (
+            "formas equivalentes con veredictos distintos (BYPASS): "
+            + repr([f for f, v in zip(forms, verdicts) if v is None])
+        )
+
+    @settings(max_examples=1000 if os.environ.get("HYPOTHESIS_PROFILE") == "thorough" else 200)
+    @given(st.one_of(gen.catastrophic_commands(), gen.benign_commands(),
+                     gen.git_bad_practice_commands(), st.text(max_size=80)))
+    def test_u3_p6_oracle_no_regression(self, cmd):
+        """U3-P6 (ORACLE, PBT-05) — LA PROPIEDAD MÁS IMPORTANTE DE U3.
+
+        El guard NUEVO (parser) debe bloquear TODO lo que bloqueaba el VIEJO (regex).
+        El oracle es la denylist regex heredada: si ella dice "catastrófico", el guard nuevo
+        NO puede decir que pase. El rewrite puede AGREGAR cobertura, jamás QUITARLA.
+
+        Sin esta propiedad, el rewrite del guard podría ABRIR un agujero que estaba tapado
+        y nadie se enteraría hasta que alguien lo explote.
+        """
+        oracle = None
+        for pat, label in guard.DENY:                      # el motor viejo, tal cual
+            if re.search(pat, cmd, re.IGNORECASE):
+                oracle = label
+                break
+        if oracle is not None:
+            assert guard.denied(cmd) is not None, (
+                f"REGRESIÓN: el guard viejo bloqueaba {cmd!r} ({oracle}), el nuevo lo deja pasar"
+            )
+
+    @settings(max_examples=1000 if os.environ.get("HYPOTHESIS_PROFILE") == "thorough" else 200,
+              suppress_health_check=_SUPPRESS)
+    @given(gen.malformed_hook_inputs())
+    def test_u3_p3_fail_closed(self, payload):
+        """U3-P3 (BR-U3-2 · SECURITY-15 · NFR4): el guard es FAIL-CLOSED.
+
+        Para CUALQUIER entrada (JSON mutilado, tipos cruzados, no-ASCII, raíz equivocada):
+        - nunca lanza una excepción no capturada,
+        - y si no puede EVALUAR el comando, DENIEGA (no deja pasar).
+
+        El precedente es U2: hmac.compare_digest crasheaba con no-ASCII -> fail-open por
+        excepción. Lo cazó una propiedad, no un test de ejemplo.
+        """
+        proc = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve().parent.parent / "vc" / "guard.py")],
+            input=json.dumps(payload), capture_output=True, text=True, timeout=20,
+        )
+        assert proc.returncode == 0, f"el guard crasheó: {proc.stderr[:200]}"
+
+        salida = proc.stdout.strip()
+        decision = None
+        if salida:
+            decision = json.loads(salida)["hookSpecificOutput"]["permissionDecision"]
+
+        # Si el payload es un Bash bien formado, la decisión la manda `denied()`.
+        # Si está mutilado (no se puede evaluar), la ÚNICA salida aceptable es deny.
+        evaluable = (
+            isinstance(payload, dict)
+            and payload.get("tool_name") == "Bash"
+            and isinstance(payload.get("tool_input"), dict)
+            and isinstance(payload["tool_input"].get("command"), str)
+        )
+        no_es_bash = (isinstance(payload, dict)
+                      and isinstance(payload.get("tool_name"), str)
+                      and payload["tool_name"] != "Bash")
+
+        if not evaluable and not no_es_bash:
+            assert decision == "deny", f"FAIL-OPEN con payload no evaluable: {payload!r}"
 
 
 # =========================================================================

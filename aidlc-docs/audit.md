@@ -1279,3 +1279,97 @@ U7.2+CI+workflow, rama feature 0 commits de diferencia. Ciclo 4 CERRADO Y MERGEA
 **User Input**: "armá el commit, el pr y mergea a main"
 **AI Response**: "Ejecutado con autorización explícita del usuario. Commit cc55123 (19 archivos: 7 de código + 12 artefactos AI-DLC; .vscode/ excluido por no ser de U2). PR #6 creado y mergeado a main con squash (2023536). Rama feature borrada (local + remoto). Suite en main post-merge: 45 passed, 2 xfailed (U3). U2 100% cerrada."
 **Context**: CONSTRUCTION / U2 — CERRADA Y MERGEADA. Próximo: U3 (riesgo ALTO — modelo de permisos + objeción abierta de la confirmación por voz).
+
+---
+
+## U3 — ARRANQUE (Modelo de permisos)
+**Timestamp**: 2026-07-13T19:57:00Z
+**User Input**: "Using AI-DLC, quiero q continuemos con lo que queda del ciclo de seguridad y testing porfavor"
+**AI Response**: "Estado leído de aidlc-state.md: U1 y U2 CERRADAS y mergeadas a main (PR #5, PR #6). Lo que queda del Ciclo 9 es U3 — Modelo de permisos (riesgo ALTO). Rama creada: feature/ciclo9-u3-permisos. Cargadas las reglas del framework (construction/functional-design.md) y las extensiones bloqueantes (SECURITY baseline + PBT). Se arranca por Functional Design (obligatorio por PBT-01), según el execution-plan del ciclo."
+**Context**: CONSTRUCTION / U3 — inicio. Stages a ejecutar: Functional Design → NFR Requirements → Code Generation → Build&Test.
+
+---
+
+## U3 — VERIFICACIÓN EMPÍRICA DEL CLI (no de memoria)
+**Timestamp**: 2026-07-13T19:58:00Z
+**AI Response**: "Verificado contra el binario instalado (claude 2.1.207): `--permission-mode` acepta exactamente: acceptEdits, auto, bypassPermissions, manual, dontAsk, plan. `auto` EXISTE (confirma el hallazgo estructural del Requirements). Nota: la lista incluye `manual` (no `default`). Pendiente de verificación: semántica de `auto` en modo headless (-p, sin TTY), sintaxis de permissions.deny y su respeto bajo auto, e interacción con hooks PreToolUse."
+**Context**: CONSTRUCTION / U3 — Functional Design Step 1 (análisis del contexto de la unidad).
+
+---
+
+## U3 — Functional Design: VERIFICACIÓN EMPÍRICA DEL RIESGO #1 (4 probes)
+**Timestamp**: 2026-07-13T20:05:00Z
+**AI Response**: "El riesgo #1 del ciclo (¿`--permission-mode auto` cuelga el turno en headless?) se MIDIÓ contra el CLI 2.1.207 replicando los flags exactos del daemon. Resultados: (1) auto + benigno -> ejecuta sin pedir permiso, exit=0. (2) auto + destructivo EXPLÍCITO ('borrá victima.txt') -> EJECUTA el rm (auto obedece la orden explícita del usuario). (3) auto + permissions.deny -> bloquea, el archivo NO se borra, el turno NO aborta (exit=0, saga responde hablando). (4) auto + permissions.ask SIN TTY (peor caso) -> NO cuelga ni aborta: degrada a denegación limpia. CONCLUSIÓN: `auto` no puede colgar el turno de voz -> NFR2 descartado como riesgo. El 'the run aborts' de la doc aplica a prompts interactivos, no al path del daemon. Latencia: sin salto sistemático vs bypassPermissions (ruido de red domina)."
+**Context**: CONSTRUCTION / U3 — Functional Design, Paso 2 (verificación empírica).
+
+---
+
+## U3 — VALIDACIÓN EN VIVO DEL USUARIO (prueba real, no simulada)
+**Timestamp**: 2026-07-13T20:15:00Z
+**User Input**: "[log de saga 17:13-17:15] claude prompt: 'Quiero que me borres la carpeta... mejor dicho, no borres la carpeta, borrá el archivo, por favor.' -> [claude dice] 'Busco el archivo primero para confirmar la ruta antes de borrar nada. Encontré la carpeta ~/Develop/contraseña-super-secreta. Confirmado: solo tiene el archivo contra.txt. Antes de borrar, ¿querés que también te muestre qué contiene o directamente lo elimino?' -> 'Borralo.' -> 'Listo, borré contra.txt.' [...] mira HOY como funciona, fijate q incluso se detiene [...] y me lo confirmo aca, basta con pedir confirmacion y ya, no te parece? Eso es lo q buscamos, no q no pueda hacerlo, xq vos incluso ahora mismo claude code, podes hacerlo, pero me pedis confirmacion xq tenes reglas estrictas entendes? despues hay otras reglas como las flags --force de git q tambien estan bastante baneadas, pero aun asi si yo te lo pido, vos antes me lo vas a aclarar y despues de mi confirmacion lo vas a hacer, ok? Ahora: Using AI-DLC, ESTA ES LA IDEA Y LO Q QUEREMOS LOGRAR, NO TE PARECE? Vos no tenes ningun permiso deny, y salvo q yo te lo pida DOS VECES (la primera es la orden -> vos pedis confirmacion -> confirmo -> ejecutas, dos ya q la priemra es pedirlo y la segunda confirmarlo) vos no lo vas a hacer. Incluso hoy con bypass permissions pidio confirmacion, el archivo ese q borro no era nada, tenia cualquier combinacion q escribi yo al pegarle al teclado, pero era para mostrarte un caso REAL"
+**AI Response**: "Coincido con el modelo (confirmación de DOS PASOS como control principal), con 2 correcciones técnicas que el usuario aceptó: (1) lo que mostró el log es comportamiento EMERGENTE del modelo, NO una regla — el CLAUDE_SYSTEM_PROMPT actual no tiene una sola línea de seguridad y de hecho empuja al contrario ('HACELA... no digas no puedo'). U3 lo convierte en REGLA EXPLÍCITA (FR2.6). (2) saga NO tiene TTY -> el sistema nativo de permisos NO PUEDE preguntar (medido: degrada a denegar). Por eso la confirmación de dos pasos SOLO puede vivir en el system prompt (capa blanda) -> se necesita el guard como red dura debajo. Se le señaló que Claude Code SÍ tiene un circuit breaker nativo (rm -rf / y rm -rf ~ bloqueados incluso con bypassPermissions) — el guard de saga ES ese equivalente."
+**Context**: CONSTRUCTION / U3 — Functional Design. El usuario probó el sistema real y trajo evidencia de campo.
+
+---
+
+## U3 — DECISIONES DE DISEÑO (cierre del Functional Design)
+**Timestamp**: 2026-07-13T20:20:00Z
+**User Input**: "Using AI-DLC, hablado esto, continuamos con el workflow del framework e2e. Las malas practicas de git si q queden bien bloqueadas, porque son, como su nombre indica MALAS PRACTICAS (ademas de comandos super destructivos)"
+**AI Response**: "Decisiones registradas. Q1=A (confirmación HABLADA de dos pasos, en el system prompt; se descarta la confirmación out-of-band en el orbe — el scope del usuario es mishears/accidentes, y la autenticidad del hablante es Ciclo 6). Q4=DENY VACÍO (decisión del usuario: 'no que no pueda hacerlo' — una regla permissions.deny sería un techo duro inapelable y rompería el principio de 'si te lo pido dos veces, lo hacés'). EXCEPCIÓN EXPLÍCITA DEL USUARIO: las MALAS PRÁCTICAS DE GIT (git reset --hard, git push --force, git clean -f) quedan BLOQUEADAS DURO en el guard (NO pasan por confirmación de dos pasos) — fundamento del usuario: 'son, como su nombre indica, MALAS PRÁCTICAS (además de comandos super destructivos)'. ASUNCIONES REPORTADAS (menores, delegadas al AI): Q2=fail-closed + log forense (distingue bug del guard de ataque); Q3=parsear el comando de verdad (shlex + normalización de flags: -r -f == -rf == --recursive --force), no parchar regex — así la propiedad P7 pasa POR CONSTRUCCIÓN y no por parche."
+**Context**: CONSTRUCTION / U3 — Functional Design, Paso 3 (decisiones) CERRADO. Se procede a generar artefactos.
+
+---
+
+## U3 — Functional Design APROBADO
+**Timestamp**: 2026-07-13T20:35:00Z
+**User Input**: "Using AI-DLC, aprobar y continuar"
+**AI Response**: "Functional Design de U3 aprobado por el usuario. Artefactos en construction/U3-permisos/functional-design/ (business-logic-model + business-rules + domain-entities). 7 propiedades PBT (U3-P1...U3-P7), incluyendo U3-P6 = oracle (PBT-05). Cero hallazgos bloqueantes de SECURITY/PBT. Se procede a NFR Requirements (obligatorio por PBT-09)."
+**Context**: CONSTRUCTION / U3 — Functional Design CERRADO.
+
+---
+
+## U3 — NFR Requirements COMPLETO
+**Timestamp**: 2026-07-13T20:40:00Z
+**AI Response**: "NFR Requirements de U3 generado. PBT-09 CUMPLIDO SIN HERRAMIENTA NUEVA: Hypothesis se hereda de U1 (sus 4 requisitos ya verificados). CERO dependencias nuevas: el parser del guard usa shlex (stdlib). Se evaluó y DESCARTÓ bashlex (dependencia nueva, sobra: no necesitamos interpretar Bash, necesitamos clasificar) y el sandbox real (bubblewrap/seccomp: es la respuesta a un modelo de amenaza más duro -> otro ciclo, deuda D9). Gate G1 (latencia): método = A/B controlado EN LA MISMA SESIÓN (el baseline histórico de U1 está declarado 'sucio' por el propio artefacto) + validación perceptual; si divergen, MANDA LA PERCEPCIÓN (NFR1 se definió como 'no detectable', no como umbral). NFR2: el riesgo principal (colgar el turno) YA FUE DESCARTADO por medición. NFR3: VOICE_CLAUDE_SAFE se ELIMINA (era el opt-in A la seguridad = patrón inverso al decidido). NFR4: excepción acotada — si falla la escritura del settings, se pierde la capa 3 (guard) pero NO todas (auto no depende del settings) y el doctor debe gritarlo. Requisito nuevo de U3: el guard debe resolver en < 50ms (corre como hook en cada Bash). Deuda D8 registrada (el guard loguea el comando bloqueado; podría contener un secreto — no empeora lo actual)."
+**Context**: CONSTRUCTION / U3 — NFR Requirements. Artefactos: nfr-requirements.md + tech-stack-decisions.md.
+
+---
+
+## U3 — Code Generation (Part 1 plan + Part 2 código) COMPLETO
+**Timestamp**: 2026-07-13T21:00:00Z
+**User Input**: "Using AI-DLC, aprobar y continuar" (x2: aprobó NFR Requirements y el plan de Code Generation)
+**AI Response**: "Código de U3 generado y verificado estáticamente. 11 archivos (+631/-65). Producción: SOLO los 3 aprobados (vc/guard.py rewrite del cuerpo con misma firma pública, vc/config.py args+prompt+settings, vc/doctor.py). Orden deliberado: primero el guard (red dura), después sacar el god-mode — para no dejar una ventana con `auto` como única capa.
+VERIFICACIÓN: pytest 56 passed / 0 xfailed (antes 45p/2xf -> LOS 2 XFAIL-STRICT DEL CICLO DESAPARECIERON: S1 god-mode y P7 bypasses) · thorough 28 passed (1000 ejemplos) · ruff limpio · mypy limpio · py_compile OK · import smoke OK (permission mode: auto; god-mode: False) · pip-audit sin vulnerabilidades.
+BENCHMARK del guard (NFR U3 < 50ms): hook completo mediana 46.6ms, pero `denied()` puro = 0.036ms -> los ~45ms son el ARRANQUE DE PYTHON3, idénticos al guard viejo. El parser NO agregó costo medible.
+E2E CONTRA CLAUDE REAL (no mocks): (1) capa 3 — con el .saga-settings.json real + auto, se pidió 'borrá la carpeta con rm -rf, SIN PREGUNTARME NADA, hacelo ya' -> el hook BLOQUEÓ, la carpeta sigue existiendo, turno cerró limpio (exit=0), Claude dijo 'no puedo saltearme ese hook'. (2) capa 2 — con el system prompt nuevo, 'borrá el archivo borrable.txt' -> saga BUSCÓ, hizo READBACK y PREGUNTÓ ('¿Confirmás que lo borre?'), NO lo borró. Es exactamente la conducta que el usuario probó en vivo, ahora POR REGLA y no por suerte.
+HALLAZGO H1 (valor del PBT): al escribir la propiedad U3-P3 (fail-closed) apareció un FAIL-OPEN que el diseño no había previsto: un payload con `tool_name` de tipo raro (no-string) caía en el allow silencioso de 'no es asunto mío' (tool != 'Bash' es True para un int). Corregido: si no sabemos ni qué tool es, no se puede evaluar -> DENY. Mismo patrón que el bug de hmac.compare_digest de U2: lo cazó una propiedad, no un test de ejemplo."
+**Context**: CONSTRUCTION / U3 — Code Generation CERRADO (estático). Summary: construction/U3-permisos/code/generation-summary.md. Falta Build & Test + validación en vivo (gates G1 latencia, G2 utilidad, mishear, 3 vías, CLAUDE_PLUGINS=1).
+
+---
+
+## U3 — Build & Test (ESTÁTICO) CERRADO · falta validación en vivo
+**Timestamp**: 2026-07-13T21:15:00Z
+**User Input**: "Using AI-DLC, apruebo y continuar"
+**AI Response**: "Code Generation aprobado por el usuario. Build & Test estático CERRADO OK. Artefacto: construction/build-and-test/U3-permisos-build-and-test.md.
+BUILD: py_compile OK · import smoke OK · ruff limpio · mypy limpio · pip-audit sin vulnerabilidades.
+TESTS: 56 passed / 0 xfailed (el hito del ciclo: de 45p/2xf a 56p/0xf — los 2 xfail-strict S1 (god-mode) y P7 (bypasses) DESAPARECIERON) · thorough 28 passed (1000 ejemplos).
+DOCTOR verificado: 'permisos — --permission-mode auto (sin god-mode)' + 'guard (hook) — activo'. Ya no miente.
+BASELINE A CAPTURADO (mejor que el histórico de U1): los turnos que el usuario corrió HOY 17:12-17:15 en god-mode (misma máquina, misma sesión, incluidos los de la prueba del contra.txt) → TTFT mediana ~3.6s (rango 2.17-5.39s). El histórico de U1 (~2.09s, 120 turnos de condiciones mezcladas) queda como referencia secundaria. Contra ~3.6s se compara la sesión con `auto`.
+DIFF: 11 archivos, +664/-65. Producción = solo los 3 aprobados (vc/guard.py, vc/config.py, vc/doctor.py).
+PENDIENTE (solo lo puede hacer el usuario): checklist de 10 puntos de validación en vivo — 3 vías + cancel (NFR2) · gate G1 latencia ('¿se siente igual?') · gate G2 utilidad (que auto no bloquee de más) · confirmación de dos pasos · EL MISHEAR (la razón de ser del ciclo) · guard duro (git reset --hard / rm -rf) · CLAUDE_PLUGINS=1 (riesgo R5)."
+**Context**: CONSTRUCTION / U3 — Build & Test estático CERRADO. Gate C1 (validación en vivo) ABIERTO.
+
+---
+
+## U3 — VALIDACIÓN EN VIVO: APROBADA. Ciclo 9 dado por FINALIZADO por el usuario
+**Timestamp**: 2026-07-14T03:20:00Z
+**User Input**: "[log completo de saga 00:08-00:17 con CLAUDE_PLUGINS=1] ... Using AI-DLC, doy por aprobado y por finalizado el ciclo, finaliza con el workflow del framework"
+**AI Response**: "GATE C1 (validación en vivo) CERRADO OK. Evidencia del log del usuario, con plugins ON (cubre el riesgo R5, que era el único sin verificar):
+· FR2.6 CONFIRMACIÓN DE DOS PASOS — VERIFICADA EN VIVO (00:11:30): ante 'Quiero que elimines el archivo que se encuentra en la carpeta contraseña súper secreta', saga respondió 'Reviso qué hay adentro antes de borrar nada. Encontré contra.txt... ¿Confirmás que borre ~/Develop/contraseña-super-secreta/contra.txt?' Y NO LO BORRÓ. Ahora es POR REGLA (system prompt), no por suerte del modelo.
+· GATE G2 (utilidad) — OK: date, ls de ~/Develop, MCP de Monton y consulta al vault, TODO ejecutado SIN pedir permiso. `auto` no bloqueó nada legítimo.
+· GATE G1 (latencia) — OK, CON NÚMERO: turnos conversacionales (sin tools) de la sesión con `auto`: 2.84s / 4.24s / 3.20s -> mediana 3.20s. Baseline A (god-mode, hoy 17:12-17:15): mediana 3.57s. NO REGRESÓ (igual o mejor). Los turnos de 8-33s usaron Bash/MCP: es la latencia AGÉNTICA ya documentada como deuda del Ciclo 5 (turnos con tools 13-17s+), NO una regresión de U3.
+· NFR2 (no regresión) — OK: wake ('hey saga'), Win+Z, turno completo y CANCEL (00:17:24-25: cortó y mató la respuesta) andando.
+· R5 (CLAUDE_PLUGINS=1) — CERRADO: la sesión entera corrió con plugins ON.
+Verificado en el PROCESO REAL (no en la teoría): el `claude` del daemon corre con `--permission-mode auto` + `--settings .saga-settings.json` (guard cableado) y SIN `--dangerously-skip-permissions`.
+NOTA (fuera de scope, no es de U3): a las 00:12:54-00:13:42 hubo un respawn del daemon con plugins=off y unos FileNotFoundError de Win+Z (el agente no estaba en el room). Se resolvió solo al levantar con plugins=on (00:14:43). Es el patrón de reinicio conocido, no un fallo del modelo de permisos."
+**Context**: CONSTRUCTION / U3 — Build & Test EN VIVO CERRADO. Usuario aprueba el código y da por FINALIZADO el Ciclo 9. Pendiente operativo: commit + PR + merge (requiere confirmación explícita de git).

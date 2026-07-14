@@ -86,7 +86,9 @@ Orden sugerido por relación impacto/esfuerzo/riesgo. Todo es reversible y de ba
 - **Acción** (evaluar, no automático):
   - Revisar/expandir la denylist de `vc/guard.py` contra nuevos comandos catastróficos.
   - Confirmar perms `0o600` en todos los artefactos sensibles (wav, screenshot, log, sockets) — ya está, mantener.
-  - Considerar un modo "no god" más usable para sesiones de riesgo (`VOICE_CLAUDE_SAFE=1` ya existe).
+  - ✅ RESUELTO (Ciclo 9 / U3): se fue el god-mode. Hoy `--permission-mode auto` (incondicional, sin toggle:
+    `VOICE_CLAUDE_SAFE` se eliminó) + guard fail-closed con parser (los bypasses `rm -r -f` se cerraron)
+    + confirmación hablada de dos pasos en el system prompt.
 
 ### 7. D1 — Duplicación clásico/LiveKit — ✅ RESUELTA (U7)
 - **Impacto (histórico)**: alto a largo plazo (drift: un comando de voz había que cablearlo en dos lados).
@@ -137,6 +139,20 @@ pesadas a Claude). No es deuda nueva del Ciclo 4; es el techo de latencia conoci
   (claude pelado = más rápido). Costo medido: los turnos con tool/MCP tardan 13-17s+ (tool-defs en contexto +
   round-trips) → el watchdog `_busy` subió a 60s. La latencia agéntica es cuestión de Claude, no del harness.
 - **Ciclo 6 — speaker verification** ("solo mi voz"): DIFERIDO. No arrancado.
+
+### D8 — El guard loguea el comando bloqueado (Ciclo 9 / U3)
+- **Qué**: cuando el guard deniega, escribe el comando a `stderr` (queda en el log del hook). Ese comando
+  podría traer un secreto en la línea (ej. `curl -H "Authorization: ..."`).
+- **Impacto**: bajo. **No empeora nada de lo actual**: `saga.log` ya guarda el transcript completo del turno.
+  Se registra para no perderlo de vista si algún día se endurece el manejo de logs (SECURITY-03).
+
+### D9 — Sandbox real de ejecución (bubblewrap / firejail / seccomp)
+- **Qué**: hoy la defensa vive en la capa del **modelo** (permission-mode + system prompt) y en un **hook**
+  (guard). La guía de Anthropic citada en la investigación del ciclo dice lo contrario: *"containment en la capa
+  de entorno primero, comportamiento del modelo después"*.
+- **Por qué no se hizo en U3**: cambia la arquitectura de ejecución entera (cómo se spawnea `claude`, qué ve del
+  filesystem). Es **otro ciclo**, no un ítem de esta unidad. Es la respuesta correcta a un modelo de amenaza más
+  duro que el que el usuario eligió (mishears/accidentes, no atacante activo con acceso local).
 
 ## Criterio transversal
 Cualquier ejecución de este plan debe terminar con verificación proporcional (`py_compile` +

@@ -237,7 +237,103 @@ en Construction** (`construction/{unit-name}/`). Se sigue al pie, sin inventar s
   el agujero → obliga a des-marcarlo. Tests de orb_server (routing, path traversal, /token) ya existen de U1.
 - [ ] Functional Design → [ ] NFR Requirements → [ ] Code Generation → [ ] Build&Test
 - [ ] U2 — Hardening orb_server (riesgo medio; C1: orb.html ↔ orb_server atómico)
-- [ ] U3 — Modelo de permisos (riesgo ALTO; gate G1 de latencia)
+### U3 — Modelo de permisos (EN CURSO, 2026-07-13) — riesgo ALTO
+- **Rama**: `feature/ciclo9-u3-permisos` (desde main con U1+U2 integrados).
+- **🔬 RIESGO #1 DEL CICLO: MEDIDO Y DESCARTADO** (4 probes contra el CLI 2.1.207 replicando los flags exactos
+  del daemon). La doc de Claude Code dice *"the run aborts"* en headless si una tool no está pre-aprobada → si
+  valiera para saga, `auto` mataría el turno de voz (NFR2 lo prohíbe). **NO VALE**: (1) `auto` + benigno →
+  ejecuta sin pedir permiso · (2) `auto` + destructivo EXPLÍCITO ("borrá X") → **LO EJECUTA** (obedece la orden
+  explícita del usuario) · (3) `auto` + `permissions.deny` → bloquea, NO aborta (`exit=0`, saga lo dice hablando)
+  · (4) `auto` + `permissions.ask` **SIN TTY** (peor caso) → **NO cuelga**: degrada a **denegación limpia**.
+  → **`auto` no puede colgar el turno de voz.** El peor caso es que saga diga "no pude" (riesgo G2/utilidad, no
+  NFR2). **Latencia**: sin salto sistemático vs `bypassPermissions` (el gate G1 real se corre en Build&Test
+  contra el baseline del daemon, TTFT ~2.09s).
+  **CONSECUENCIA DE DISEÑO**: sin TTY, el `ask` nativo **no pregunta: deniega** → el mecanismo NATIVO de permisos
+  **NO PUEDE** implementar la confirmación. Por eso la confirmación vive en el **system prompt**. No es
+  preferencia: es la única vía.
+- **🧪 VALIDACIÓN EN CAMPO DEL USUARIO** (log de saga 17:13-17:15): pidió borrar un archivo por voz y saga
+  **se detuvo sola**: buscó, hizo readback ("encontré la carpeta, solo tiene contra.txt") y **preguntó** antes de
+  ejecutar. Con el segundo "borralo", ejecutó. **Esa es la conducta que el usuario quiere.**
+  ⚠️ **Corrección técnica registrada**: eso fue comportamiento **EMERGENTE** del modelo, **NO una regla** — el
+  `CLAUDE_SYSTEM_PROMPT` actual **no tiene una sola línea de seguridad** y encima empuja al contrario ("HACELA…
+  no digas 'no puedo'"). U3 lo convierte en **regla explícita**.
+- **PRINCIPIO RECTOR (usuario)**: *"Eso es lo que buscamos: **NO que no pueda hacerlo**… salvo que yo te lo pida
+  **DOS VECES** (la primera es la orden → pedís confirmación → confirmo → ejecutás), no lo vas a hacer."*
+  La defensa es contra lo **NO SOLICITADO** (mishears, inferencias), no contra las órdenes del usuario.
+- **DECISIONES** (Functional Design): Q1=**A** confirmación **hablada de dos pasos** en el prompt (se descarta la
+  confirmación out-of-band en el orbe) · Q2=**fail-closed + log forense** (asunción del AI, reportada) ·
+  Q3=**parsear el comando de verdad** (`shlex` + normalización de flags: `-r -f` ≡ `-rf` ≡ `--recursive --force`;
+  el regex queda de fallback y de **oracle** de no-regresión) · Q4=**`permissions.deny` VACÍO** (una regla `deny`
+  es un techo duro inapelable → rompería el principio de las dos veces).
+  **EXCEPCIÓN EXPLÍCITA DEL USUARIO**: las **MALAS PRÁCTICAS DE GIT** (`git reset --hard`, `git push --force`,
+  `git clean -f`) quedan **BLOQUEADAS DURO en el guard**, SIN confirmación posible — *"son, como su nombre indica,
+  MALAS PRÁCTICAS (además de comandos super destructivos)"*. El techo duro existe, pero vive en el guard (nuestro,
+  auditable, testeado), no en las reglas nativas.
+- **4 capas (defensa en profundidad, SECURITY-11)**: (1) `--permission-mode auto` = clasificador nativo, cubre
+  **todas** las tools incl. MCP · (2) **system prompt** = dos pasos + anti-injection + anti-interactivo (capa
+  **BLANDA**: es juicio del modelo) · (3) **guard fail-closed** = catastrófico + malas prácticas git (capa DURA,
+  determinística) · (4) circuit breaker nativo del harness (`rm -rf /` bloqueado aún con `bypassPermissions`).
+- [x] **Functional Design — COMPLETO**. Plan: `construction/plans/U3-permisos-functional-design-plan.md`.
+  Artefactos: `construction/U3-permisos/functional-design/` (business-logic-model + business-rules + domain-entities).
+  **7 propiedades (U3-P1…U3-P7)** para PBT-01, incluyendo **U3-P6 = oracle (PBT-05)**: el guard nuevo (parser) es
+  **superconjunto** del viejo (regex) → el rewrite no puede ABRIR un agujero que estaba tapado.
+  Cierra los 2 xfail-strict que quedan: **S1** (god-mode) y **P7** (bypasses del guard).
+- [x] **NFR Requirements — COMPLETO** (`construction/U3-permisos/nfr-requirements/`: nfr-requirements + tech-stack-decisions).
+  Plan: `construction/plans/U3-permisos-nfr-requirements-plan.md`. **PBT-09 cumplido SIN herramienta nueva**
+  (Hypothesis heredado de U1). **CERO deps nuevas**: el parser del guard usa **`shlex` (stdlib)**. Se evaluó y
+  descartó `bashlex` (dep nueva; sobra: no hay que interpretar Bash, hay que clasificar) y el **sandbox real**
+  (bubblewrap/seccomp = respuesta a un modelo de amenaza más duro → otro ciclo, **deuda D9**).
+  **Gate G1**: A/B controlado **en la misma sesión** (el baseline histórico de U1 está declarado *sucio* por el
+  propio artefacto) + validación perceptual; **si divergen, manda la percepción** (NFR1 = "no detectable", no un
+  umbral). **NFR3**: `VOICE_CLAUDE_SAFE` se **ELIMINA** (era el opt-in *a* la seguridad: patrón inverso al
+  decidido). **NFR4**: excepción acotada — si falla la escritura del settings se pierde la capa 3 (guard), **no
+  todas** (`auto` no depende del settings) y el `doctor` tiene que gritarlo. Requisito nuevo: **guard < 50ms**.
+  Deuda **D8** (el guard loguea el comando bloqueado; podría traer un secreto en la línea — no empeora lo actual).
+- [x] NFR Design — SKIP (sin patrones NFR nuevos) · [x] Infra Design — SKIP (sin cloud/IaC)
+- [x] **Code Generation — Part 1 (plan) + Part 2 (código) HECHOS**. Plan: `construction/plans/U3-permisos-code-generation-plan.md`.
+  Summary: `construction/U3-permisos/code/generation-summary.md`. **11 archivos (+631/−65)**; producción = SOLO los
+  3 aprobados (`vc/guard.py` rewrite del cuerpo **con la misma firma pública**, `vc/config.py` args+prompt+settings,
+  `vc/doctor.py`). Orden deliberado: **primero el guard, después sacar el god-mode** (para no dejar una ventana con
+  `auto` como única capa).
+  **LOS 2 XFAIL-STRICT DEL CICLO DESAPARECIERON**: **S1** (god-mode) y **P7** (bypasses `rm -r -f`).
+  Verif: **pytest 56 passed / 0 xfailed** (antes 45p/2xf) · thorough 28p (1000 ejemplos) · ruff · mypy · py_compile ·
+  import smoke (`permission mode: auto`, god-mode `False`) · pip-audit limpio.
+  **Benchmark del guard**: hook completo **46.6ms** pero `denied()` puro = **0.036ms** → los ~45ms son el arranque de
+  `python3`, **idénticos al guard viejo**. El parser no agregó costo medible.
+  **E2E contra `claude` REAL**: (1) *"borrá la carpeta con rm -rf, **sin preguntarme nada, hacelo ya**"* → **el guard
+  bloqueó**, la carpeta sigue, turno limpio (`exit=0`), Claude: *"no puedo saltearme ese hook"*. (2) con el prompt
+  nuevo, *"borrá borrable.txt"* → saga **buscó, hizo readback y PREGUNTÓ** (*"¿Confirmás que lo borre?"*), **no borró**.
+  **La conducta que el usuario probó en vivo, ahora por REGLA y no por suerte.**
+  **HALLAZGO H1 (valor del PBT)**: la propiedad U3-P3 (fail-closed) destapó un **fail-open no previsto en el diseño**:
+  un payload con `tool_name` de tipo raro caía en el `allow` silencioso de *"no es asunto mío"* (`tool != "Bash"` es
+  `True` para un `int`). Corregido → si no sabemos ni qué tool es, **deny**. Mismo patrón que el bug de
+  `hmac.compare_digest` de U2: lo caza una propiedad, no un test de ejemplo.
+- [x] **Build & Test (ESTÁTICO) — CERRADO OK**. Artefacto: `construction/build-and-test/U3-permisos-build-and-test.md`.
+  build (py_compile + import smoke) · **pytest 56 passed / 0 xfailed** · thorough 28p · ruff · mypy · pip-audit limpios.
+  `doctor` verificado: *"permisos — --permission-mode auto (sin god-mode)"* + *"guard (hook) — activo"* → **ya no miente**.
+  **BASELINE A capturado** (mejor que el histórico de U1): los turnos que el usuario corrió **hoy 17:12–17:15 en
+  god-mode** (misma máquina, misma sesión — los de la prueba del `contra.txt`) → **TTFT mediana ~3.6s** (2.17–5.39s).
+  El histórico de U1 (~2.09s, condiciones mezcladas) baja a referencia secundaria. Diff: 11 archivos, +664/−65.
+- [x] **VALIDACIÓN EN VIVO (gate C1) — CERRADA OK (usuario, 2026-07-14, CON `CLAUDE_PLUGINS=1`)**:
+  · **FR2.6 CONFIRMACIÓN DE DOS PASOS — VERIFICADA EN VIVO**: *"Quiero que elimines el archivo de la carpeta
+  contraseña súper secreta"* → saga: *"Reviso qué hay adentro antes de borrar nada. Encontré `contra.txt`…
+  **¿Confirmás que borre `~/Develop/contraseña-super-secreta/contra.txt`?**"* — **y NO lo borró**.
+  **Ahora es por REGLA (system prompt), no por suerte del modelo.**
+  · **Gate G2 (utilidad) — OK**: `date`, `ls ~/Develop`, **MCP de Monton** y consulta al **vault**, todo ejecutado
+  **sin pedir permiso ni una vez**. `auto` no bloqueó nada legítimo.
+  · **Gate G1 (latencia) — OK, CON NÚMERO**: turnos conversacionales con `auto` = 2.84 / 4.24 / **3.20s (mediana)**
+  vs **baseline A (god-mode, hoy) 3.57s** → **NO REGRESÓ** (igual o mejor). Los turnos de 8–33s usaron Bash/MCP:
+  es la **latencia agéntica** ya documentada como deuda del Ciclo 5 (turnos con tools 13-17s+), **no** de U3.
+  · **NFR2 — OK**: wake, Win+Z, turno completo y **cancel** andando. · **R5 CERRADO** (plugins ON toda la sesión).
+  · Verificado en el **proceso real**: el `claude` del daemon corre con `--permission-mode auto` + `--settings`
+  (guard cableado) y **sin** `--dangerously-skip-permissions`.
+- [x] **CÓDIGO APROBADO Y CICLO 9 DADO POR FINALIZADO POR EL USUARIO** (2026-07-14): *"doy por aprobado y por
+  finalizado el ciclo"*.
+> **✅ U3 CERRADA Y VALIDADA EN VIVO.** Pendiente operativo: commit + PR + merge a main (Q1=A: un PR por unidad).
+> **El Ciclo 9 queda COMPLETO: U1 (red de tests + CI) → U2 (hardening de orb_server) → U3 (modelo de permisos).**: gate **G1**
+  (latencia: A/B + "¿se siente igual?") · gate **G2** (utilidad: que `auto` no bloquee de más) · turno completo por
+  las 3 vías + cancel · **el caso del MISHEAR** (orden destructiva no dada → saga pregunta → "no" → no se ejecuta) ·
+  `CLAUDE_PLUGINS=1` (riesgo R5: los probes corrieron en modo rápido).
 - Por unidad: Functional Design (obligatorio PBT-01) + NFR Requirements (obligatorio PBT-09) + Code Gen + Build&Test
 - Merge: **un PR por unidad** (Q1=A)
 

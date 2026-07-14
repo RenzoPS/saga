@@ -158,7 +158,6 @@ Toggles:
 | Var | Default | Qué hace |
 |-----|---------|----------|
 | `SAGA_WAKE_ENABLED` | `0` (off) | `=1` activa el wake "hey saga" en el server (sobre el track del mic) |
-| `VOICE_CLAUDE_SAFE` | (off) | `=1` desactiva `--dangerously-skip-permissions` |
 | `VOICE_CLAUDE_MEM` | `0` (off) | `=1` activa claude-mem en voz (+2-7s/turno; respawnear daemon) |
 | `CLAUDE_PLUGINS` | `0` (off) | `=1` carga los plugins de Claude en el daemon de voz (MCP+skills+hooks+slash), menos los de `configs/plugins-blacklist.json`. Off = claude pelado (más rápido). Spike agéntico |
 | `ORB_PORT` | `8777` | puerto del server del orbe |
