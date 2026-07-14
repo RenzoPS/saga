@@ -27,6 +27,9 @@ configs/plugins-blacklist.json
 .claude/
 docs/superpowers/
 
+# config del editor: personal, no del proyecto.
+.vscode/
+
 # Framework AI-DLC VERSIONADO en el repo (self-contained): workflow CLAUDE.md (raíz) + reglas
 # .aidlc-rule-details/ + bitácora/estado/artefactos aidlc-docs/. Los secretos y el runtime siguen
 # ignorados arriba (.env*, session.json, .saga-settings.json, configs/plugins-blacklist.json, logs).
