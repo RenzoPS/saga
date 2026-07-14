@@ -186,8 +186,12 @@ class TestGuardU3:
                 f"REGRESIÓN: el guard viejo bloqueaba {cmd!r} ({oracle}), el nuevo lo deja pasar"
             )
 
+    # deadline=None: este test lanza un SUBPROCESO por ejemplo (~45ms de arranque de python3).
+    # El deadline default de Hypothesis (200ms) lo hace flaky bajo carga -> un timeout en un runner
+    # compartido es ruido, no un bug (misma política que P5/P6 en U1). El techo real del guard lo
+    # mide el benchmark de Build & Test, no este test.
     @settings(max_examples=1000 if os.environ.get("HYPOTHESIS_PROFILE") == "thorough" else 200,
-              suppress_health_check=_SUPPRESS)
+              suppress_health_check=_SUPPRESS, deadline=None)
     @given(gen.malformed_hook_inputs())
     def test_u3_p3_fail_closed(self, payload):
         """U3-P3 (BR-U3-2 · SECURITY-15 · NFR4): el guard es FAIL-CLOSED.

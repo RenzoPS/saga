@@ -78,8 +78,9 @@ def _detect_claude_mem_dir() -> "str | None":
 CLAUDE_MEM_DIR = _detect_claude_mem_dir()
 
 # --- Settings aditivos del daemon de voz (vía --settings, per-sesión, NO toca la config global) ---
-# Llevan DOS cosas: (1) el guard (hook PreToolUse anti-Bash-catastrófico: god-mode + voz -> un mishear
-# no puede borrar el disco; corre aún con --dangerously-skip-permissions); (2) los plugins que saga apaga.
+# Llevan DOS cosas: (1) el guard (hook PreToolUse: la capa DURA contra lo catastrófico y las malas
+# prácticas de git -> un mishear no puede borrar el disco ni reventar el historial); (2) los plugins
+# que saga apaga. El guard corre SIEMPRE, sea cual sea el permission-mode (los hooks no se saltean).
 GUARD_SCRIPT = PROJECT_DIR / "vc" / "guard.py"
 SAGA_SETTINGS = PROJECT_DIR / ".saga-settings.json"
 
