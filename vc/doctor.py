@@ -8,7 +8,8 @@ import urllib.request
 
 from .config import (
     CLAUDE_SOCK, ORB_URL, CLAUDE_MEM_DIR, CLAUDE_MODEL,
-    WHISPER_SIZE, WHISPER_BEAM, CLAUDE_SKIP_PERMISSIONS, SESSION_FILE,
+    WHISPER_SIZE, WHISPER_BEAM, CLAUDE_PERMISSION_MODE, SESSION_FILE,
+    SAGA_SETTINGS, _SAGA_SETTINGS,
 )
 
 OK, BAD, INFO = "\033[32m✓\033[0m", "\033[31m✗\033[0m", "\033[33m○\033[0m"
@@ -73,8 +74,13 @@ def doctor() -> int:
     line(OK, "modelo Claude", CLAUDE_MODEL)
     line(OK, "Whisper", f"{WHISPER_SIZE} (beam {WHISPER_BEAM})")
     line(OK if CLAUDE_MEM_DIR else INFO, "claude-mem", CLAUDE_MEM_DIR or "no detectado (sin memoria)")
-    line(INFO if CLAUDE_SKIP_PERMISSIONS else OK, "permisos",
-         "BYPASS activo (--dangerously-skip-permissions)" if CLAUDE_SKIP_PERMISSIONS else "modo seguro")
+    line(OK, "permisos", f"--permission-mode {CLAUDE_PERMISSION_MODE} (sin god-mode)")
+    # El guard es la capa DURA (catastrófico + malas prácticas de git). Si el settings no se pudo
+    # escribir, el hook NO está cableado -> esa capa no existe. Hay que gritarlo, no callarlo:
+    # el usuario tiene que saber que está menos protegido de lo que cree.
+    line(OK if _SAGA_SETTINGS else BAD, "guard (hook)",
+         f"activo ({SAGA_SETTINGS})" if _SAGA_SETTINGS
+         else "NO CABLEADO — falló el settings: sin red anti-catastrófico")
     line(OK if SESSION_FILE.exists() else INFO, "session.json",
          "existe" if SESSION_FILE.exists() else "no existe (sesión nueva en el próximo turno)")
 

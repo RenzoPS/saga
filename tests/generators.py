@@ -109,6 +109,76 @@ def benign_commands(draw):
     return draw(st.sampled_from(_BENIGN))
 
 
+# --- U3: MALAS PRÁCTICAS DE GIT (decisión explícita del usuario, Ciclo 9 / U3 / BR-U3-4b) ---
+# Bloqueo DURO: no pasan por confirmación hablada. saga no las hace por voz, punto.
+_GIT_BAD = [
+    ("reset", ["--hard"], ["HEAD~1", "origin/main", ""]),
+    ("push", ["--force", "-f", "--force-with-lease"], ["origin main", "", "--all"]),
+    ("clean", ["-f", "-fd", "-fdx", "-xf"], ["", "."]),
+]
+
+
+@st.composite
+def git_bad_practice_commands(draw):
+    """`git reset --hard`, `git push --force`, `git clean -f` en sus variantes reales (U3-P1)."""
+    sub, flags, operandos = draw(st.sampled_from(_GIT_BAD))
+    parts = ["git", sub, draw(st.sampled_from(flags))]
+    op = draw(st.sampled_from(operandos))
+    if op:
+        parts.append(op)
+    return " ".join(p for p in parts if p)
+
+
+# --- U3-P5: formas EQUIVALENTES del mismo comando catastrófico ---
+# La propiedad: el veredicto NO puede depender de cómo se escribió el comando.
+# `rm -rf X` == `rm -r -f X` == `rm -fr X` == `rm --recursive --force X` == `sudo rm -R -f X`.
+@st.composite
+def equivalent_catastrophic_forms(draw):
+    """Devuelve una LISTA de escrituras equivalentes del MISMO comando catastrófico.
+    Todas tienen que dar el mismo veredicto (U3-P5). Acá es donde vivían los bypasses."""
+    operando = draw(st.sampled_from(["/", "~/algo", "/home/user/data", "./build"]))
+    prefijo = draw(st.sampled_from(["", "sudo ", "/usr/bin/"]))
+    return [
+        f"{prefijo}rm -rf {operando}",
+        f"{prefijo}rm -r -f {operando}",
+        f"{prefijo}rm -fr {operando}",
+        f"{prefijo}rm -f -r {operando}",
+        f"{prefijo}rm --recursive --force {operando}",
+        f"{prefijo}rm --force --recursive {operando}",
+        f"{prefijo}rm -R -f {operando}",
+    ]
+
+
+# --- U3-P3: HookInput malformado (fuente: guard.main, protocolo PreToolUse) ---
+# El guard es FAIL-CLOSED: ninguna de estas entradas puede producir un fail-open
+# ni una excepción no capturada. El precedente es U2 (hmac.compare_digest crasheaba
+# con no-ASCII -> fail-open por excepción). Lo cazó una propiedad, no un test de ejemplo.
+@st.composite
+def malformed_hook_inputs(draw):
+    """Payloads de stdin que el guard puede recibir: válidos, mutilados, con tipos cruzados,
+    con no-ASCII, con la raíz equivocada. Todos tienen que resolverse SIN fail-open."""
+    kind = draw(st.integers(min_value=0, max_value=7))
+    junk = st.one_of(st.integers(), st.none(), st.lists(st.integers(), max_size=3),
+                     st.dictionaries(st.text(max_size=5), st.integers(), max_size=3),
+                     st.text(alphabet=st.characters(codec="utf-8"), max_size=40))
+    if kind == 0:                                   # bien formado, comando arbitrario
+        return {"tool_name": "Bash", "tool_input": {"command": draw(st.text(max_size=60))}}
+    if kind == 1:                                   # command con tipo equivocado
+        return {"tool_name": "Bash", "tool_input": {"command": draw(junk)}}
+    if kind == 2:                                   # tool_input con tipo equivocado
+        return {"tool_name": "Bash", "tool_input": draw(junk)}
+    if kind == 3:                                   # sin tool_input
+        return {"tool_name": "Bash"}
+    if kind == 4:                                   # tool_name con tipo equivocado
+        return {"tool_name": draw(junk), "tool_input": {"command": "rm -rf /"}}
+    if kind == 5:                                   # raíz que no es dict
+        return draw(st.one_of(st.lists(st.integers(), max_size=3), st.integers(), st.text(max_size=20)))
+    if kind == 6:                                   # dict vacío
+        return {}
+    return {"tool_name": "Bash", "tool_input": {"command": draw(  # no-ASCII (el caso de U2)
+        st.text(alphabet=st.characters(min_codepoint=128, codec="utf-8"), max_size=30))}}
+
+
 # --- E5: Payloads del socket de control (fuente: orb_server._forward_ctl) ---
 # El body de un POST son bytes crudos -> el dominio real del payload es st.binary().
 # Para el texto usamos st.characters(codec="utf-8") que excluye surrogates (\ud800..) no encodables.
