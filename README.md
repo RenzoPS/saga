@@ -206,3 +206,7 @@ velocidad). El server LiveKit es local y su signaling bindea solo a loopback (na
 externo pide token ni se une). Las keys viven en `.env.local` (gitignored). Las capturas
 de pantalla se borran inmediatamente tras mandarlas a Claude. Para todo-local (sin que el
 audio salga a la nube): no pongas `DEEPGRAM_API_KEY` → STT/TTS corren con el fallback local.
+
+## Licencia
+
+[MIT](LICENSE) © 2026 Renzo Piris.

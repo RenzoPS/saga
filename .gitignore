@@ -30,9 +30,13 @@ docs/superpowers/
 # config del editor: personal, no del proyecto.
 .vscode/
 
-# Framework AI-DLC VERSIONADO en el repo (self-contained): workflow CLAUDE.md (raíz) + reglas
-# .aidlc-rule-details/ + bitácora/estado/artefactos aidlc-docs/. Los secretos y el runtime siguen
-# ignorados arriba (.env*, session.json, .saga-settings.json, configs/plugins-blacklist.json, logs).
+# Framework AI-DLC: NO va al repo. Las bitácoras (aidlc-docs/) son transcripciones de
+# sesiones de desarrollo, con prompts crudos y referencias a otros proyectos; las reglas
+# (.aidlc-rule-details/) son del framework, no de saga; y CLAUDE.md es el workflow que
+# las carga, inútil sin ellas. La documentación técnica propia vive en docs/ y SÍ va.
+aidlc-docs/
+.aidlc-rule-details/
+CLAUDE.md
 
 # temporales del sistema
 /tmp/
