@@ -122,8 +122,7 @@ cuando se pasa `turn_handling`:
 **Latencia percibida típica** (dejás de hablar → voz de saga): con el `min_delay=3.0` de U10
 ≈ **5.5s** = EOU 3.0 + ttft 2.2 + ttfb 0.3 (el benchmark Ciclo 4 era ≈4.5s con min 2.0). El
 `min_delay` es una **decisión** (deja seguir hablando entre sub-frases sin partir el turno);
-bajarlo acelera pero reintroduce chopping. Detalle en
-`aidlc-docs/construction/build-and-test/ciclo4-build-and-test.md`.
+bajarlo acelera pero reintroduce chopping.
 
 ## Wake word
 

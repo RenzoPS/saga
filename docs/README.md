@@ -31,11 +31,15 @@ Documentación para mantenedores: entender, operar y extender saga. Puerta de en
 > [!note] Artefactos locales (no versionados)
 > El proyecto se documenta/analiza con tooling de dev **local que no se commitea** (gitignored).
 > Si los tenés en tu copia, complementan esta carpeta — pero no hacen falta para entender saga desde acá:
-> - `aidlc-docs/` — análisis exhaustivo del workflow AI-DLC (9 artefactos de reverse-engineering + plan).
+> - `aidlc-docs/` — bitácoras y artefactos de reverse-engineering del workflow AI-DLC.
 > - `graphify-out/` — grafo navegable del código generado con graphify (`graph.html`).
 
 ## Cómo se generó esta documentación
 
-Producida con el workflow **AI-DLC** (tooling de dev local, no versionado). Esta carpeta (`docs/`)
-es la documentación del repo, **autocontenida**: no depende de archivos gitignored. Restricción de
+Parte del desarrollo de saga se hizo con **[AI-DLC](https://github.com/awslabs/aidlc-workflows)**,
+el framework de AWS Labs de ciclo de vida de desarrollo asistido por IA, ejecutado con **Claude Code**:
+fases de inception y construction con gates de aprobación por etapa, y esta documentación como uno de
+sus artefactos. Las bitácoras del framework son tooling de dev local y no se versionan.
+
+Esta carpeta (`docs/`) es **autocontenida**: no depende de archivos gitignored. Restricción de
 diseño: toda afirmación es verificable contra el código, y la documentación no modifica el runtime.

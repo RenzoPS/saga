@@ -95,7 +95,8 @@ Binarios requeridos: `claude` (crítico), `mpg123`/`pacat`/`paplay` (audio), `gr
   auto-marca `unavailable` bajo la carga de arranque, ver gotcha del dispatch automático.)
 - **Verificá el estado en una pasada**: `saga-ctl status` muestra stack, server (`:port UP/DOWN`),
   worker, daemons y readiness de sockets.
-- **Benchmark de latencia**: ver `aidlc-docs/construction/build-and-test/ciclo4-build-and-test.md`.
+- **Benchmark de latencia**: medí con los tiempos que loguea el worker por etapa (STT, TTFT del
+  cerebro, ttfb del TTS). Referencia medida: ~0.3s / ~2s / ~0.3s con Deepgram.
 
 ## Gotchas críticos (leelos antes de tocar)
 

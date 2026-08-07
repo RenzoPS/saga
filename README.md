@@ -4,6 +4,11 @@ Asistente de voz para Linux/Hyprland: **voz → Claude Code → voz**, sobre **L
 (runtime de audio) + **Deepgram** (STT/TTS), con un orbe 3D que reacciona al estado.
 Push-to-talk con Win+Z.
 
+> Proyecto personal, **en desarrollo activo**. Lo uso todos los días en mi máquina y lo publico
+> para mostrar en qué trabajo por fuera del laburo. No es un producto: no hay instalador, la
+> configuración asume Arch + Hyprland, y las decisiones están tomadas para mi setup. El código y
+> la documentación sí están escritos para que se entiendan y se puedan correr.
+
 Corre en **modo room** (único, estándar): un server LiveKit local (binario nativo) + el browser
 como cliente (orbe) que publica el mic y reproduce el TTS + un worker (el cerebro). Con
 `DEEPGRAM_API_KEY` el STT/TTS es Deepgram; sin key cae al fallback local (whisper + edge-tts),
@@ -206,6 +211,14 @@ velocidad). El server LiveKit es local y su signaling bindea solo a loopback (na
 externo pide token ni se une). Las keys viven en `.env.local` (gitignored). Las capturas
 de pantalla se borran inmediatamente tras mandarlas a Claude. Para todo-local (sin que el
 audio salga a la nube): no pongas `DEEPGRAM_API_KEY` → STT/TTS corren con el fallback local.
+
+## Desarrollo
+
+Parte de saga se construyó con **[AI-DLC](https://github.com/awslabs/aidlc-workflows)** (AWS Labs),
+un framework de ciclo de vida de desarrollo asistido por IA, corriéndolo con **Claude Code**: fases
+de inception y construction, gates de aprobación por etapa y trazabilidad de decisiones. Las
+bitácoras que genera son tooling de desarrollo local y no se versionan; lo que quedó de ese proceso
+en el repo es la documentación de [`docs/`](docs/) y el propio diseño del código.
 
 ## Licencia
 

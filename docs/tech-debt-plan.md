@@ -26,7 +26,7 @@ código. Detectada durante el análisis del código.
 ## Resuelto por el Ciclo 4 (migración a modo room)
 
 Deuda/limitaciones del modo console que el cambio de transporte **eliminó de raíz** (verificado en vivo
-por el usuario, 10/10). Referencia: `aidlc-docs/construction/build-and-test/ciclo4-build-and-test.md`.
+por el usuario, 10/10).
 
 | # | Deuda (modo console) | Cómo se resolvió en room | Estado |
 |---|---|---|---|
