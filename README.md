@@ -15,6 +15,27 @@ como cliente (orbe) que publica el mic y reproduce el TTS + un worker (el cerebr
 `DEEPGRAM_API_KEY` el STT/TTS es Deepgram; sin key cae al fallback local (whisper + edge-tts),
 dentro del agente.
 
+## El orbe
+
+No hay ventana, ni botones, ni historial: **el orbe es toda la interfaz**. Three.js con bloom,
+corriendo en el browser, que además es el cliente LiveKit que publica el mic y reproduce el TTS.
+
+Cada estado del turno tiene su color, su velocidad y su energía —definidos en un solo lugar,
+el objeto `PH` de [`orb/orb.html`](orb/orb.html)— y las transiciones se interpolan en vez de
+saltar. Mientras habla, el orbe **late con el nivel real del audio del TTS** (Web Audio), no con
+una animación de relleno.
+
+| | |
+|:--:|:--:|
+| ![Orbe en estado idle](docs/img/orbe-idle.png) | ![Orbe grabando](docs/img/orbe-rec.png) |
+| **`idle`** · en espera, cian sereno | **`rec`** · te está escuchando |
+| ![Orbe pensando](docs/img/orbe-think.png) | ![Orbe hablando](docs/img/orbe-speak.png) |
+| **`think`** · Claude Code resolviendo el turno | **`speak`** · la red late con la voz |
+
+Hay más estados que los cuatro de arriba: `listen` (línea abierta en modo llamada),
+`transcribe`, `screen` (mirando pantalla), y transitorios como `nueva`, `error`, `cancel` y
+`attach`, que se muestran un ratito y vuelven solos al estado de base.
+
 ## Flujo
 
 ```
