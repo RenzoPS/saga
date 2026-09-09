@@ -255,3 +255,79 @@ def test_p6_only_exact_token(server, cand):
         return
     status, _, _ = _get(server, f"/?token={quote(cand)}", token=None)
     assert status == 401, f"token {cand!r} fue aceptado (o crasheó el server)"
+
+
+# ── Dispatch del agente (fix de la race de arranque) ─────────────────────────
+def test_el_worker_se_registra_con_el_nombre_que_pide_el_dispatch():
+    """El dispatch por API nombra al agente. Si el nombre del worker y el del pedido
+    divergen, el server no despacha a nadie y el sintoma es identico al bug original:
+    agente ausente, sin error visible en ningun lado."""
+    import inspect
+
+    from lk import agent as lk_agent
+    from vc.config import LIVEKIT_AGENT_NAME
+
+    src = inspect.getsource(lk_agent)
+    assert "@server.rtc_session(agent_name=LIVEKIT_AGENT_NAME)" in src
+    assert LIVEKIT_AGENT_NAME
+
+
+def test_el_token_no_pide_dispatch_por_roomconfig():
+    """Regresion: `RoomConfiguration.agents` en el JWT pide un job `JT_PARTICIPANT`, y el
+    SDK de Python solo registra workers `JT_ROOM`/`JT_PUBLISHER` (`ServerType` no tiene
+    PARTICIPANT). El server responde, textual:
+
+        not dispatching agent job since no worker is available
+          {"agentName": "saga", "jobType": "JT_PARTICIPANT", "room": "saga"}
+
+    O sea: se ve bien, no rompe nada visible, y el agente nunca entra. Se pide por API."""
+    import inspect
+
+    src = inspect.getsource(orb_server)
+    assert "with_room_config" not in src
+    assert "ensure_agent()" in src
+
+
+def test_el_sdk_no_puede_atender_el_job_que_pediria_el_token():
+    """Fija la razon del test anterior contra el SDK REAL: el dia que aparezca
+    `ServerType.PARTICIPANT`, este test se cae y el dispatch por token pasa a ser viable."""
+    from livekit.agents.worker import ServerType
+
+    assert not hasattr(ServerType, "PARTICIPANT"), (
+        "el SDK ahora soporta workers JT_PARTICIPANT: revisar si conviene volver al "
+        "dispatch por token (mas simple: no necesita llamada a la API)"
+    )
+
+
+def test_el_dispatch_no_duplica_agentes(monkeypatch):
+    """Recargar la pestaña llama /token de nuevo. Si pidiera dispatch cada vez, se
+    acumularian agentes en la sala hablando encima."""
+    from vc import dispatch
+
+    pedidos = []
+
+    async def _fake(room, agent_name):
+        pedidos.append((room, agent_name))
+        return True
+
+    monkeypatch.setattr(dispatch, "_ensure_async", _fake)
+    monkeypatch.setattr(dispatch, "LIVEKIT_API_KEY", "k")
+    monkeypatch.setattr(dispatch, "LIVEKIT_API_SECRET", "s")
+
+    dispatch.ensure_agent("saga", "saga")
+    assert pedidos == [("saga", "saga")]
+
+
+def test_el_dispatch_nunca_rompe_el_pedido_del_cliente(monkeypatch):
+    """Fail-soft: si LiveKit no contesta, el peor caso es el de antes (agente ausente).
+    El orbe tiene que poder servir su pagina igual."""
+    from vc import dispatch
+
+    async def _explota(room, agent_name):
+        raise RuntimeError("livekit caido")
+
+    monkeypatch.setattr(dispatch, "_ensure_async", _explota)
+    monkeypatch.setattr(dispatch, "LIVEKIT_API_KEY", "k")
+    monkeypatch.setattr(dispatch, "LIVEKIT_API_SECRET", "s")
+
+    assert dispatch.ensure_agent("saga", "saga") is False   # no levanta

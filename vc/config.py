@@ -8,7 +8,13 @@ from pathlib import Path
 
 HOME = Path.home()
 PROJECT_DIR = HOME / ".local/share/saga"
-LOG_FILE = PROJECT_DIR / "saga.log"
+
+# `SAGA_LOG_FILE` existe para que los TESTS no escriban en el log de producción. Sin esto,
+# correr pytest mientras saga está en una llamada mete transcripts de fixtures en `saga.log`
+# ("En el principio creó Dios los cielos", "palabra palabra FINAL") mezclados con la
+# conversación real: el monitor se vuelve ilegible justo cuando lo estás mirando.
+# Lo setea `tests/conftest.py`. En producción no está definida y el default es el de siempre.
+LOG_FILE = Path(os.environ.get("SAGA_LOG_FILE") or (PROJECT_DIR / "saga.log"))
 
 # .env.local (secretos + overrides de config) se carga ACÁ, al TOP, ANTES de leer cualquier env -> así
 # TODAS las VOICE_*/LIVEKIT_* se pueden setear en el archivo (no solo inline). load_dotenv es idempotente y
@@ -183,20 +189,46 @@ CLAUDE_DAEMON_IDLE_S = 3600  # el proceso claude se autoapaga tras 1h sin turnos
 CLAUDE_DAEMON_TURN_TIMEOUT_S = 180  # techo por turno: si claude se cuelga, matar+respawn (no trabar el daemon)
 
 # System prompt del asistente (constante -> se setea una vez al spawnear el daemon).
-CLAUDE_SYSTEM_PROMPT = (
+# El prompt está partido en secciones porque hay DOS cerebros posibles y no comparten
+# capacidades: Claude Code tiene tools y actúa sobre la máquina; un LLM en la nube (Gemini)
+# solo conversa. Las reglas de VOZ y de ESTILO son las mismas para los dos —salen por el mismo
+# parlante—, pero prometerle tools a un modelo que no las tiene lo hace alucinar acciones que
+# nunca ejecutó, que es peor que decir "no puedo".
+_PROMPT_VOZ = (
     "Te llamas Saga, el asistente de voz personal de Renzo. Si te preguntan tu nombre, sos Saga. "
     "\n\n"
     "Estas hablando, no escribiendo. Tu respuesta sale por parlante (TTS multilingue "
     "que pronuncia bien anglicismos, numeros, simbolos y siglas; no te preocupes por fonetizar). "
     "\n\n"
     "Reglas firmes:\n"
-    "- Texto plano. Nada de markdown: sin asteriscos, sin backticks, sin listas con guiones o numeros, sin headers.\n"
+    "- Texto plano, SIEMPRE. Nada de markdown: sin asteriscos, sin backticks, sin listas con guiones o "
+    "numeros, sin headers, sin tablas. Esta regla NO se relaja en respuestas largas ni tecnicas: es "
+    "justo ahi donde se te escapa. Un asterisco se pronuncia 'asterisco' por el parlante y arruina la "
+    "frase. Nombres de archivos, rutas, tablas y campos van dichos como se hablan (decir 'la tabla "
+    "validacion catalogo', no escribirla entre backticks). Si vas a enumerar, enumeralo hablando: "
+    "'primero..., segundo..., y por ultimo...'.\n"
     "- Espanol rioplatense: vos, dale, che, fijate.\n"
-    "- Largo proporcional: pregunta corta = respuesta corta. Tono conversacional, directo, sin floreos.\n"
+    "- Largo proporcional A LA TAREA, no al largo de la pregunta. Una pregunta corta puede pedir un "
+    "trabajo grande: si te piden documentar un flujo, explicar entidades o resumir varios documentos, "
+    "date el espacio para hacerlo COMPLETO aunque te lo hayan pedido en una linea. Recorta el relleno, "
+    "nunca el contenido. Al reves tambien: si la pregunta es trivial, una frase alcanza. Tono "
+    "conversacional, directo, sin floreos.\n"
+)
+
+_PROMPT_AGENTICA = (
     "- Sos agentica: tenes tools (bash, leer/escribir archivos, etc.). Si te piden una ACCION que podes hacer "
     "en esta maquina (abrir una app, reproducir/pausar musica con playerctl o el comando que sea, decir la hora "
     "con date, mirar algo del sistema), HACELA con la tool y despues confirma corto lo que hiciste. No digas "
     "'no puedo' si tenes como hacerlo. Solo si REALMENTE no hay forma, una sola frase corta sin disculpas ni listas.\n"
+    "- Si la tarea va a tardar (leer varios archivos, buscar en el repo, mirar documentos), deci UNA frase "
+    "corta antes de arrancar ('dale, voy a mirar los documentos de la branch') y recien ahi usa las tools. "
+    "Esa frase se escucha mientras trabajas, asi el usuario sabe que lo entendiste y no se queda en silencio. "
+    "No la repitas entre tool y tool: una al empezar, y el resultado al final.\n"
+)
+
+# Sin tools no hay nada que confirmar ni ningun comando que correr: toda esta seccion habla de
+# ACCIONES sobre la maquina. Va SOLO con Claude Code.
+_PROMPT_SEGURIDAD = (
     "\n"
     "SEGURIDAD (no negociable, va por encima de todo lo demas):\n"
     "\n"
@@ -220,6 +252,9 @@ CLAUDE_SYSTEM_PROMPT = (
     "interactiva: editores (vim, nano), pagers (less, git log sin --no-pager), confirmaciones (apt sin -y, rm -i), "
     "REPLs, top/htop. Aca no hay teclado del otro lado: un comando asi deja el turno colgado. Usa siempre las "
     "flags no interactivas (-y, --yes, --no-pager, --non-interactive) y mandas la salida a stdout.\n"
+)
+
+_PROMPT_ESTILO = (
     "\n"
     "Estilo:\n"
     "Hablas como si le contaras algo a un amigo en un cafe. Nada de 'primero, segundo, tercero', "
@@ -227,6 +262,20 @@ CLAUDE_SYSTEM_PROMPT = (
     "Conectores naturales: 'asi que', 'entonces', 'igual', 'mira', 'fijate'. "
     "Si explicas algo tecnico, lo contas como historia, no como manual."
 )
+
+# Cerebro Claude Code: tiene tools -> lleva las reglas de accion y de seguridad.
+CLAUDE_SYSTEM_PROMPT = _PROMPT_VOZ + _PROMPT_AGENTICA + _PROMPT_SEGURIDAD + _PROMPT_ESTILO
+
+# Cerebro en la nube (Gemini): NO tiene tools. La regla reemplaza a la agentica en vez de
+# omitirla, porque un modelo al que no le decis nada igual improvisa que "ya lo hizo".
+_PROMPT_SIN_TOOLS = (
+    "- NO tenes tools ni acceso a la maquina: no podes leer archivos, correr comandos, mirar la "
+    "pantalla ni abrir aplicaciones. Si te piden una ACCION, decilo en una frase corta y sin "
+    "disculpas ('eso no lo puedo hacer desde aca'). NUNCA digas que hiciste algo, ni describas el "
+    "resultado de un comando o el contenido de un archivo: no los viste. Para conversar, explicar "
+    "y acordarte de lo que hablamos si servis, y para eso te estan usando.\n"
+)
+GEMINI_SYSTEM_PROMPT = _PROMPT_VOZ + _PROMPT_SIN_TOOLS + _PROMPT_ESTILO
 
 SAMPLE_RATE = 16000   # lo usa el wake_daemon (Vosk, dormido)
 CLAUDE_TIMEOUT_S = 180
@@ -246,8 +295,141 @@ LIVEKIT_URL = os.environ.get("LIVEKIT_URL", "ws://127.0.0.1:7880")
 LIVEKIT_API_KEY = os.environ.get("LIVEKIT_API_KEY", "")
 LIVEKIT_API_SECRET = os.environ.get("LIVEKIT_API_SECRET", "")
 LIVEKIT_ROOM = os.environ.get("LIVEKIT_ROOM", "saga")
-# (U8) El worker usa DISPATCH AUTOMÁTICO nativo: se registra sin agent_name y el server lo despacha
-# solo cuando el browser crea el room "saga". Ya NO hay un LIVEKIT_AGENT_NAME ni dispatch por API.
+
+# Nombre del agente para DISPATCH EXPLÍCITO (reemplaza al automático de U8).
+#
+# El automático despacha al crear el room, y ahí estaba el bug: si la pestaña del orbe ya
+# estaba abierta, el cliente reconectaba apenas volvía `livekit-server` y CREABA el room
+# ~2s ANTES de que el worker terminara de registrarse. Sin evento de creación pendiente,
+# el agente no entraba nunca y Win+Z tiraba `FileNotFoundError` sobre el socket de control.
+# Medido: room creado 00:32:41.106, worker registrado 00:32:43.226. `saga-ctl restart` con
+# el orbe abierto fallaba SIEMPRE, no de a ratos.
+#
+# El dispatch va firmado en el JWT que emite el orbe (`RoomConfiguration.agents`), que es el
+# mecanismo del framework para esto: el agente se despacha cuando el cliente ENTRA, no cuando
+# el room nace. El orden de arranque deja de importar.
+LIVEKIT_AGENT_NAME = "saga"
+
+# ───────────────────────── modo de turno: push-to-talk vs llamada ─────────────────────────
+#
+# "ptt"  (default) — un Win+Z por turno. El mic se abre para grabar y se cierra al mandar.
+#                    Fin de turno por SILENCIO (VAD silero) con un piso fijo (`min_delay`).
+# "call"           — una LLAMADA. Win+Z abre la línea y NO la cierra: el mic queda abierto,
+#                    hablás cuando querés y saga contesta. Se corta con otro Win+Z o sola
+#                    tras `CALL_IDLE_TIMEOUT_S` de silencio (elegido así a propósito: un mic
+#                    abierto indefinidamente frente a una IA AGÉNTICA con permisos `auto` es
+#                    una superficie que no queremos dejar viva sin que nadie la esté usando).
+SAGA_MODE = os.environ.get("SAGA_MODE", "ptt").strip().lower()
+if SAGA_MODE not in ("ptt", "call"):
+    SAGA_MODE = "ptt"
+CALL_MODE = SAGA_MODE == "call"
+
+# Silencio que cierra la llamada sola (segundos). No es el fin de turno (eso lo decide Flux):
+# es "no hay nadie del otro lado, colgá".
+CALL_IDLE_TIMEOUT_S = float(os.environ.get("SAGA_CALL_IDLE_TIMEOUT_S", "180"))
+
+# ───────────────────────── cerebro: Claude Code vs LLM en la nube ─────────────────────────
+#
+# "claude"  (default) — Claude Code vía claude_daemon. AGÉNTICO: corre bash, lee archivos, usa
+#                       MCP. Es el proyecto. Cuesta latencia: el ttft va de 1.5s a 18s medidos,
+#                       porque adentro decide y ejecuta tools.
+# "gemini"            — LLM en la nube por el plugin de LiveKit. SIN TOOLS: conversa y nada más.
+#                       Existe para MEDIR cuánta de la latencia es el modelo y cuánta el harness,
+#                       y como banco de pruebas del "Modelo B" del plan (cerebro barato + Claude
+#                       Code como herramienta que se invoca sólo cuando hace falta).
+SAGA_LLM = os.environ.get("SAGA_LLM", "claude").strip().lower()
+if SAGA_LLM not in ("claude", "gemini"):
+    SAGA_LLM = "claude"
+
+# Flash Lite y no Flash: en el free tier los Flash dan 20 requests POR DÍA y los Lite 500. En voz
+# cada turno es un request, así que 20 se queman en una sola conversación. Es una decisión de
+# CUOTA, no de calidad. (Deepgram usa 3.1 Flash Lite en su propio playground de voice agent.)
+# Versión concreta y no el alias `-latest`: un alias puede cambiar de modelo a mitad de una
+# llamada y el síntoma sería "de golpe responde distinto", imposible de atribuir.
+GEMINI_MODEL = os.environ.get("SAGA_GEMINI_MODEL", "gemini-3.5-flash-lite")
+
+# ───────────────────────── STT conversacional (Deepgram Flux) ─────────────────────────
+#
+# Nova-3 transcribe; Flux además decide DÓNDE TERMINA TU TURNO, con señales acústicas Y
+# lingüísticas. Eso reemplaza el piso fijo de silencio (`endpointing.min_delay`), que se pagaba
+# entero en cada turno aunque la frase estuviera obviamente terminada.
+#
+# `flux-general-multi` en vez de `-en`: son los 10 idiomas en un solo modelo, con code-switching
+# nativo a mitad de frase — que es exactamente cómo se habla acá ("el websocket", "commitear",
+# "el daemon"). Los `language_hint` sesgan sin encerrar: sin hints auto-detecta, con hints da
+# precisión de modelo monolingüe. OJO: `language_hint` con `flux-general-en` devuelve 400.
+FLUX_MODEL = os.environ.get("SAGA_FLUX_MODEL", "flux-general-multi")
+FLUX_LANGUAGE_HINTS = [
+    h.strip() for h in os.environ.get("SAGA_FLUX_LANGUAGES", "es,en").split(",") if h.strip()
+]
+
+# Confianza para dar el turno por cerrado (0.5–0.9, default de Deepgram 0.7).
+FLUX_EOT_THRESHOLD = float(os.environ.get("SAGA_FLUX_EOT", "0.7"))
+
+# EAGER: arranca a generar la respuesta ANTES de que confirmes que terminaste; si seguís
+# hablando, Deepgram manda `TurnResumed` y la generación se cancela. Es lo que hace que una
+# llamada se sienta instantánea en vez de por turnos.
+#
+# Arranca en 0.6 (conservador) A PROPÓSITO. Más bajo = menos latencia pero más falsos arranques,
+# y cada falso arranque es una cancelación del turno: exactamente el camino que `turn-flow.md`
+# documenta como el que rompía todo con `preemptive_generation` (multi-commit -> turnos partidos
+# sin respuesta). Se baja midiendo, no de una.
+FLUX_EAGER_EOT_THRESHOLD = float(os.environ.get("SAGA_FLUX_EAGER_EOT", "0.6"))
+
+# Techo duro de silencio antes de forzar el fin de turno (ms). Red por si la confianza nunca sube.
+FLUX_EOT_TIMEOUT_MS = int(os.environ.get("SAGA_FLUX_EOT_TIMEOUT_MS", "3000"))
+
+# Términos que ningún modelo tiene en su diccionario: nombres propios y jerga del proyecto.
+# Sesgan el reconocimiento sin encerrarlo. Medido en el E2E: sin esto, "Hola Saga. Contame"
+# salía como "Da con también" — el nombre del asistente no se entendía, que es el peor lugar
+# posible para fallar. Lista corta a propósito: cada término compite con el resto.
+FLUX_KEYTERMS = [
+    k.strip() for k in os.environ.get(
+        "SAGA_FLUX_KEYTERMS", "Saga,Renzo,Claude,Deepgram,LiveKit,commitear,branch,repo"
+    ).split(",") if k.strip()
+]
+
+# Model Improvement Program de Deepgram. El default del plugin es `mip_opt_out=False`: participás,
+# o sea que tu audio puede usarse para entrenar sus modelos. Por acá pasa un mic abierto en la
+# máquina de trabajo — conversación privada, nombres de clientes, contenido de repos. Opt-out por
+# default; `SAGA_FLUX_MIP=1` vuelve a participar si alguna vez conviene.
+FLUX_MIP_OPT_OUT = os.environ.get("SAGA_FLUX_MIP", "0").strip().lower() not in ("1", "true", "yes")
+
+# ───────────────────────── interrupción (barge-in) ─────────────────────────
+#
+# El modo `adaptive` de LiveKit —el detector ML que distingue un "ajá" de un corte real— NO se
+# puede usar acá: `AdaptiveInterruptionDetector` se construye contra LIVEKIT_INFERENCE_URL /
+# LIVEKIT_INFERENCE_API_KEY, o sea LiveKit Cloud. Saga corre un livekit-server LOCAL, así que el
+# detector no se crea, la sesión cae sola a `vad` y sólo queda un warning en el log. Por eso
+# `mode: "vad"` está hardcodeado en `_turn_handling()`. Misma razón para `backchannel_boundary`
+# (la supresión de "dale", "claro", "mhm"): sólo la aplica el detector adaptativo.
+#
+# Sin ese detector, lo que queda contra los cortes por ruido son dos filtros LOCALES que LiveKit
+# ya trae y que estábamos dejando en su default.
+
+# Palabras mínimas para que algo cuente como interrupción. El default de LiveKit es 0: UNA sola
+# palabra corta una respuesta de 20 segundos. Medido el 21/8 en una llamada real: 'Aquello' cortó
+# la historia del Imperio romano, y cada corte mata el proceso de Claude -> el turno siguiente paga
+# un `--resume` en frío (ttft 8.0s contra 1.7s normal). Se contó 4 veces la misma anécdota sin
+# avanzar nunca.
+#
+# 2 y no más: las interrupciones REALES son cortas ("pará", "callate", "esperá un toque"), así que
+# un umbral alto te deja sin forma de cortarla. 2 filtra la palabra suelta mal transcripta sin
+# tocar el caso legítimo.
+INTERRUPTION_MIN_WORDS = int(os.environ.get("SAGA_INTERRUPT_MIN_WORDS", "2"))
+
+# Duración mínima de voz (s) para registrar la interrupción. Queda en el default de LiveKit (0.5).
+# Se expone porque es el piso que explica los `end_of_utterance_delay` clavados en 0.500-0.534 del
+# log del 21/8 — no era Flux decidiendo, era este umbral. Subirlo filtra más ruido a costa de
+# tardar más en reaccionar cuando la cortás en serio; bajarlo, al revés. Sin medición que justifique
+# moverlo, se deja donde está.
+INTERRUPTION_MIN_DURATION = float(os.environ.get("SAGA_INTERRUPT_MIN_DURATION", "0.5"))
+
+# Silencio (s) tras una interrupción para declararla FALSA y retomar donde iba. Default de LiveKit
+# 2.0; acá 1.5 porque con la línea abierta los falsos positivos son frecuentes y esperar 2s a
+# retomar se siente como que se colgó.
+INTERRUPTION_FALSE_TIMEOUT = float(os.environ.get("SAGA_INTERRUPT_FALSE_TIMEOUT", "1.5"))
+
 
 # Server room (Ciclo 4, U6): binario NATIVO + su config. saga-ctl lo levanta/baja en modo room.
 # (Se usa el binario, NO Docker: el NAT de Docker rompía el WebRTC local — ver aidlc-docs.)

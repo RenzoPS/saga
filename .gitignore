@@ -55,3 +55,6 @@ orb-core-*.png
 graphify-out/
 .graphifyignore
 .aidlc/
+
+# backups locales que deja el flujo de trabajo (snapshot antes de refactors grandes)
+.backup-*/

@@ -16,7 +16,8 @@ Endpoints de entrada del panel del orbe (reenvian al socket o escriben /tmp, sin
 Stdlib + paths/constantes de vc.config. La única dep pip es livekit-api, y SOLO se importa
 dentro de /token (lazy) -> el resto del módulo es stdlib puro.
 
-Estados: idle, rec, transcribe, screen, think, speak, nueva, error, cancel, attach.
+Estados: idle, rec, listen, transcribe, screen, think, speak, nueva, error, cancel, attach.
+('listen' = modo llamada: linea abierta esperandote, distinto del 'rec' puntual de push-to-talk.)
 """
 import os
 import sys
@@ -40,6 +41,7 @@ from vc.config import (
     ATTACH_IMG_PATH, LK_CTL_SOCK, orb_token,
     LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_ROOM,
 )
+from vc.dispatch import ensure_agent
 
 PORT = int(os.environ.get("ORB_PORT", "8777"))
 # U2/FR3.1: el token NO puede quedar vacio. Antes: `os.environ.get("ORB_TOKEN", "")` + `if not TOKEN:
@@ -85,7 +87,7 @@ HTML = HERE / "orb.html"
 VENDOR = (HERE / "vendor").resolve()
 
 VALID_STATES = {
-    "idle", "rec", "transcribe", "screen",
+    "idle", "rec", "listen", "transcribe", "screen",
     "think", "speak", "nueva", "error", "cancel", "attach",
 }
 MIME = {".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css",
@@ -252,14 +254,21 @@ class Handler(BaseHTTPRequestHandler):
                     can_publish_data=False,
                     can_update_own_metadata=False,
                 ))
-                # El token es SOLO para unirse al room. El dispatch del agente es AUTOMÁTICO nativo (U8):
-                # al unirse el browser, crea el room "saga" y el server despacha el worker solo. El token
-                # no despacha ni trae RoomConfiguration.
+                # El token es SOLO para unirse al room. El dispatch del agente NO va acá:
+                # `RoomConfiguration.agents` pide un job `JT_PARTICIPANT` y el SDK de Python sólo
+                # registra workers `JT_ROOM`/`JT_PUBLISHER` -> el server responde "not dispatching
+                # agent job since no worker is available". Se pide por API en `vc.dispatch`,
+                # justo abajo. Ver el módulo para el detalle.
                 .to_jwt()
             )
         except Exception as e:  # noqa: BLE001 - degradar a 500 con causa
             self.send_error(500, f"no se pudo emitir el token: {e}")
             return
+        # El cliente está por entrar al room: es EL momento de pedir el agente. Acá el orden de
+        # arranque deja de importar (el bug era justamente que el room nacía antes que el worker).
+        # Idempotente y fail-soft: si el agente ya está, no hace nada; si LiveKit no contesta,
+        # el token igual sale. Ver vc/dispatch.py.
+        ensure_agent()
         body = json.dumps(
             {"url": LIVEKIT_URL, "token": token, "room": LIVEKIT_ROOM, "wake": WAKE_ENABLED}
         ).encode()

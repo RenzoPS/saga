@@ -3,21 +3,23 @@
 Documentación para mantenedores: entender, operar y extender saga. Puerta de entrada e índice.
 
 > **saga** — asistente de voz Linux/Hyprland: **voz → Claude Code → voz** sobre LiveKit + Deepgram,
-> con un orbe 3D reactivo. **Modo único: transporte ROOM** (server LiveKit local + browser cliente + worker;
-> el worker se despacha SOLO vía dispatch automático nativo). El cerebro es Claude Code (ejecuta bash, lee
-> archivos): *actúa* sobre la máquina, no solo conversa.
+> con un orbe 3D reactivo. **Modo único de transporte: ROOM** (server LiveKit local + browser cliente
+> + worker; el worker se despacha **por API** desde `/token`, ver `vc/dispatch.py`). El cerebro es
+> Claude Code (ejecuta bash, lee archivos): *actúa* sobre la máquina, no solo conversa.
 
 ## Empezar
 
 - Setup, run y stack: ver el [`README.md`](../README.md) de la raíz.
-- Arranque rápido: `saga-ctl start` · uso: Win+Z (push-to-talk) · apagar: `saga-ctl stop`.
+- Arranque rápido: `saga-ctl start` · uso: Win+Z · apagar: `saga-ctl stop`.
+- Modo llamada (línea abierta, fin de turno por Flux): `SAGA_MODE=call saga-ctl start`.
 
 ## Índice
 
 | Documento | Para qué |
 |-----------|----------|
-| [architecture.md](architecture.md) | Cómo está armado: topología room (único), componentes, dispatch automático |
-| [turn-flow.md](turn-flow.md) | Qué pasa paso a paso en un turno (modo room), turn detector, comandos de voz |
+| [architecture.md](architecture.md) | Cómo está armado: topología room, componentes, dispatch, **quién es dueño del contexto** |
+| [modo-llamada.md](modo-llamada.md) | El modo llamada: Flux, línea abierta, barge-in, interrupciones |
+| [turn-flow.md](turn-flow.md) | Qué pasa paso a paso en un turno, turno segmentado, comandos de voz |
 | [internal-api.md](internal-api.md) | Endpoints HTTP del orbe + protocolos de los 3 sockets + modelos de datos |
 | [code-guide.md](code-guide.md) | Recorrido archivo por archivo: qué hace cada módulo |
 | [operations.md](operations.md) | saga-ctl, procesos, logs, env, diagnóstico, gotchas críticos |

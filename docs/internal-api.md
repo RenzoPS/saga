@@ -17,13 +17,17 @@ Auth opcional por `ORB_TOKEN` (vacío = sin auth, local). Solo loopback.
 | GET | `/vendor/...` | Three.js vendorizado (path traversal bloqueado; `.mjs`→`text/javascript`) | JS/CSS o 404 |
 | GET | `/healthz` | probe de readiness | `200 "ok"` |
 | GET | `/events` | stream SSE del estado (cola por cliente, ping 15s) | `text/event-stream` |
-| GET | `/token?identity=&room=` | mintea el JWT con que el browser se une al room (modo room) | `{url, token, room}` / `500` |
+| GET | `/token?identity=&room=` | mintea el JWT con que el browser se une al room **y pide el dispatch del agente por API** (`vc/dispatch.py`) | `{url, token, room, wake}` / `500` |
 | POST | `/state?s=<estado>` | setea el estado actual (lo postean los procesos de voz) | `204` |
 | POST | `/attach?kind=image` | imagen pegada → dead-drop `/tmp/saga-attach.png` (body vacío borra) | `204` |
 | POST | `/stage` | texto del textarea → reenvía `stage <b64>` al socket de control | `204` |
 | POST | `/say` | prompt por texto (Shift+Enter) → reenvía `say <b64>` al socket | `204` / `503` |
 
-Estados válidos: `idle, rec, transcribe, screen, think, speak, nueva, error, cancel, attach`
+Estados válidos: `idle, rec, listen, transcribe, screen, think, speak, nueva, error, cancel, attach`
+
+> `listen` (◉ En línea, cian) es del **modo llamada**: la línea está abierta esperándote. No es `rec`
+> (rojo "Grabando") a propósito — en una llamada el mic vive abierto todo el rato, así que pintarlo
+> como una grabación puntual sería mentir sobre lo que está pasando.
 (inválido → normaliza a `idle`).
 
 ### `GET /token` (modo room, Ciclo 4)
@@ -43,11 +47,19 @@ browser se une al room "saga" lo CREA y el server despacha el worker solo (`@ser
 ## Socket de control del agente — `LK_CTL_SOCK` = `/tmp/saga-lk-ctl.sock` (0o600)
 
 Protocolo: una línea `verbo [payload_b64]\n` → `ok\n` / `err\n`. Lo crea el worker en `entry()`
-(`asyncio.start_unix_server`), recién al despacharse al room (dispatch automático disparado por el browser al
-unirse) → el socket existe solo cuando el agente ya entró (lo que `vcctl` espera como readiness, DESPUÉS de
-abrir el browser).
+(`asyncio.start_unix_server`), recién al despacharse al room (dispatch por API desde `/token`, cuando el
+browser va a entrar) → el socket existe solo cuando el agente ya entró (lo que `vcctl` espera como
+readiness, DESPUÉS de abrir el browser).
 
-- `press` (o `toggle`) — Win+Z. Acción según fase: idle→grabar, rec→cortar y mandar, busy→matar.
+> **Solo lo borra quien lo bindeó.** El `atexit` de limpieza se registra dentro de `entry()` y compara
+> inodo antes de desenlazar. A nivel de módulo corría en cualquier proceso que importara `lk.agent`, y
+> LiveKit prewarmea procesos de repuesto que importan el módulo sin atender un job nunca: al morir uno,
+> se llevaba el socket del job vivo y Win+Z tiraba `FileNotFoundError` con la llamada todavía abierta.
+
+- `press` (o `toggle`) — Win+Z. Acción según fase **y modo**:
+  - push-to-talk: `idle`→grabar · `rec`→cortar y mandar · `busy`→matar la respuesta.
+  - llamada: `idle`→abrir la línea (→`call`) · `call`→colgar. No existe "grabar un turno": la línea
+    queda abierta y el fin de cada turno lo decide Flux.
 - `stage <b64>` — setea/limpia el texto staged (memoria del agente, vía `vc/attach.stage_text`).
 - `say <b64>` — dispara un turno inmediato con ese texto (vacío → `err`).
 

@@ -32,19 +32,28 @@ son densos y confiables** — leelos en el archivo.
 
 - **`lk/agent.py`** — el **worker** del modo room (`start`): conectado a `livekit-server`, el audio
   llega por el track del browser. Construye el server `AgentServer(load_fnc=lambda: 0.0, drain_timeout=0,
-  num_idle_processes=1)` y se registra con **dispatch AUTOMÁTICO** vía `@server.rtc_session()` SIN `agent_name`
-  (U8): el browser, al unirse al room, dispara el dispatch solo. `load_fnc=0` → nunca se auto-marca
+  num_idle_processes=1)`. El **dispatch lo pide `orb_server` por API** (`vc/dispatch.py`) desde `/token`,
+  cuando el cliente está por entrar: ni automático (despacha al crearse el room, y el cliente le ganaba
+  ~2s al registro del worker) ni por token (`JT_PARTICIPANT`, que el SDK de Python no sabe atender).
+  `load_fnc=0` → nunca se auto-marca
   `unavailable` (era la causa raíz del Win+Z `FileNotFoundError` intermitente: el prod `load_threshold=0.7`
   shedeaba bajo la carga de arranque). `drain_timeout=0` → SIGTERM cierra al toque (libera el :8081).
   `num_idle_processes=1` → un solo proceso forkeado (saga atiende 1 turno a la vez). Hace
   `os.environ.pop("LIVEKIT_AGENT_NAME", None)` antes de crear el server (si esa env existiera, el SDK forzaría
-  explicit dispatch). `session.start(..., room_input_options=RoomInputOptions(close_on_disconnect=False))` →
-  recargar/cerrar la pestaña del orbe NO mata la sesión ni el socket de Win+Z. Arma el `AgentSession`
-  (STT+VAD+LLM+TTS) con TODA la config de turnos dentro de `turn_handling`: fin de turno por VAD puro
-  (`turn_detection="vad"`, silero; antes era el turn detector semántico `MultilingualModel`, reemplazado en
-  U10 por VAD puro → liberó ~1.8 GB de RAM), `endpointing` min 3s, `interruption` por VAD local, y
-  `preemptive_generation` **OFF** (sobre transcripts parciales rompía el LLM bloqueante). Implementa
-  las 3 fases de Win+Z (`_press`), el prompt por texto (`_say`), el socket de control
+  explicit dispatch). `session.start(..., room_options=RoomOptions(close_on_disconnect=False))` →
+  recargar/cerrar la pestaña del orbe NO mata la sesión ni el socket de Win+Z. (`RoomInputOptions`/
+  `RoomOutputOptions` están deprecados y mueren en v2.0.) Arma el `AgentSession` (STT+VAD+LLM+TTS) con
+  TODA la config de turnos dentro de `turn_handling`, que **ramifica por modo** (`_turn_handling()`):
+  en llamada `turn_detection="stt"` (lo decide Flux) y sin `endpointing`; en push-to-talk
+  `turn_detection="vad"` (silero; U10 sacó el `MultilingualModel` semántico → −1.8 GB de RAM) con
+  `endpointing` min 1.2s / max 6s. La `interruption` es común a los dos: `mode="vad"` (el `adaptive`
+  necesita LiveKit Cloud), `min_words=2`, `min_duration=0.5`, `resume_false_interruption` con
+  `false_interruption_timeout=1.5`. `preemptive_generation` **OFF** en ambos (sobre transcripts
+  parciales rompía el LLM bloqueante; la especulación que queremos es el `eager_eot` de Flux).
+  El `atexit` que limpia el socket de control se registra **dentro de `entry()`** y compara inodo —a
+  nivel de módulo se lo llevaban los procesos prewarm de LiveKit, dejando la llamada viva sin poder
+  colgar. Implementa las fases de Win+Z (`_press`: 3 fases en ptt, abrir/colgar en llamada, con el
+  timer `_arm_call_idle` de 180s), el prompt por texto (`_say`), el socket de control
   (`press`/`stage`/`say`), y los handlers de estado `_on_agent_state`/`_on_user_state`. **Timers
   propios** (`asyncio.call_later`, sin internals): `_arm_away` (6s "abriste el mic y no hablaste",
   VAD-aware) y `_arm_busy` (60s watchdog de turno colgado en thinking; era 18s, subido en
@@ -57,6 +66,21 @@ son densos y confiables** — leelos en el archivo.
   adjuntos staged, y puentea el generador bloqueante de Claude a deltas asyncio. Cancelación en
   barge-in: al cancelar LiveKit el turno, setea el flag `_cancel` (que `claudecli`/daemon respetan)
   y espera al worker antes de limpiarlo.
+  Ojo con un detalle del orden: el detector de visión corre sobre `pedido` (lo que dijiste vos),
+  **no** sobre el `prompt` final. Corría sobre el compuesto y la nota de `heard` citaba a Claude:
+  contando sobre "San Nicolás de **Mira**" disparaba capturas de pantalla que nadie pidió.
+- **`lk/speech.py`** — voz del **turno segmentado** y su concurrencia. El primer bloque lo habla el
+  pipeline normal; los siguientes, `session.say()` (primitiva nativa: no sintetizamos audio). Cada
+  bloque abre y cierra su propio websocket, así el hueco de tools no cruza ninguno abierto. Numera los
+  turnos (`new_turn()`) para que uno viejo no pise al vigente, y cancela **las dos puntas**: el task
+  async y el thread bloqueado en el socket del daemon, con un `threading.Event` **por turno**.
+- **`lk/heard.py`** — qué llegaste a **escuchar** de una respuesta cortada. LiveKit trunca y marca
+  `ChatMessage.interrupted`; el módulo lee ese texto y lo deja como nota consume-once para el próximo
+  prompt. No reimplementa la truncación: la transporta al lado de Claude, que cree que dijo todo.
+- **`lk/wakeword.py`** — detector "hey saga" sobre el track del mic del browser. Usa el
+  `WakeWordModel` oficial de `livekit.wakeword`, pero la ventana deslizante es propia: el
+  `WakeWordListener` nativo lee portaudio (mic local) y no acepta un track.
+- **`lk/onnx_tune.py`** — capea threads de ONNX **antes** de instanciar cualquier `InferenceSession`.
 - **`lk/whisper_stt.py`** — adaptador STT faster-whisper para LiveKit (fallback sin Deepgram).
 - **`lk/edge_tts_plugin.py`** — plugin TTS edge-tts para LiveKit (fallback sin Deepgram).
 
@@ -77,7 +101,13 @@ son densos y confiables** — leelos en el archivo.
   (`claude -p`). Maneja imagen (multimodal por stdin), reintento de sesión, y respeta el flag global
   de cancelación.
 - **`vc/session.py`** — sesión uuid persistida (escritura atómica) + detección de keywords:
-  `is_reset_command`, `is_visual_command`.
+  `is_reset_command`, `is_visual_command`. **No hay timeout**: la sesión persiste entre reinicios de
+  saga hasta que pidas un reset por voz, así que `saga-ctl start` siempre reanuda (`--resume`) y nunca
+  arranca de cero. Medido: 823 mensajes / 816 KB tras un día de uso, y recargar eso cuesta ~1.4s.
+- **`vc/dispatch.py`** — `ensure_agent()`: le pide a LiveKit que meta al worker en la sala, por API,
+  desde `/token`. Idempotente (no duplica agentes) y **nunca rompe el pedido del cliente**: si el
+  dispatch falla, el token sale igual. El módulo documenta por qué no se usa el dispatch automático
+  ni el firmado en el JWT.
 - **`vc/attach.py`** — adjuntos del panel, **consume-once**: texto en memoria del proceso agente,
   imagen como path en `/tmp`. `take_staged()` consume en el turno.
 - **`vc/desktop.py`** — integración Hyprland: `grim` (screenshot), monitor kitty con tail del log.
@@ -110,6 +140,21 @@ son densos y confiables** — leelos en el archivo.
   `rec` vía el estado SSE) y recibe el track TTS. Con **Web Audio `AnalyserNode` sobre ese track
   (U5)** el orbe late con el nivel REAL de la voz (`window.__ttsLevel()`). Cuidado: colores de fondo
   en **sRGB** (`THREE.SRGBColorSpace`), sin eso el bloom revienta a blanco.
+  - **Gate del mic por estado**: `rec` → unmute, cualquier otro → mute. Con `SAGA_WAKE_ENABLED=1` el
+    gate **no aplica** y el mic queda desmuteado siempre (el server necesita oír "hey saga"). Ojo:
+    en modo llamada el estado es `listen`, no `rec` → hoy el mic solo queda abierto **porque el wake
+    está ON**. Ver D13 en [`tech-debt-plan.md`](tech-debt-plan.md).
+  - **Control de micrófono** (arriba a la izquierda, espejo de `#conn`): mute con clic o tecla `M`, y
+    selector de dispositivo. Sobre el SDK pelado —sin `@livekit/components-react`— con las tres
+    primitivas que envuelven sus hooks: `micTrack.mute()/unmute()`, `Room.getLocalDevices('audioinput')`
+    y `room.switchActiveDevice(...)`. Dos detalles no obvios, copiados del starter oficial: los devices
+    llegan con `deviceId` **vacío** hasta que se concede el permiso (por eso se filtran, y por eso el
+    control aparece recién con el track ya publicado), y el **mute manual tiene que ganarle** al gate
+    automático o el próximo cambio de estado te desmutea solo.
+  - **Un solo `<audio>` por track**: `attachRemoteAudio` limpia el anterior. Antes solo appendeaba y,
+    con `close_on_disconnect=False`, cada `saga-ctl restart` sumaba otro elemento sobre el MISMO track
+    → dos pipelines de playback con jitter buffers independientes → interferencia destructiva. No
+    suena a eco: suena a que el volumen se desplomó de la nada.
 - **`orb/vendor/`** — terceros vendorizados: Three.js (módulo + postprocessing UnrealBloom + shaders)
   y **`orb/vendor/livekit/livekit-client.esm.mjs`** (SDK JS del cliente LiveKit, modo room).
 

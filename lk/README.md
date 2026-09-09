@@ -7,16 +7,22 @@ nativo local; el audio entra/sale por el track del browser (cliente orbe). Ver e
 `README.md` de la raíz para el panorama completo.
 
 ## Piezas
-- `agent.py` — entrypoint. `AgentServer` + `AgentSession` (STT/LLM/TTS) + máquina de 3 fases Win+Z + socket de control + orbe.
+- `agent.py` — entrypoint. `AgentServer` + `AgentSession` (STT/LLM/TTS) + fases de Win+Z + socket de control + orbe.
 - `claude_llm.py` — LLM custom: delega en `claude_daemon` (cerebro) y dispara visión (grim) en comandos visuales. Cancela el turno del daemon en barge-in/interrupción (sin zombie).
+- `speech.py` — turno **segmentado**: habla con `session.say()` los bloques posteriores al primero y arbitra turnos solapados.
+- `heard.py` — qué llegaste a **escuchar** de una respuesta cortada; se lo pasa a Claude como nota consume-once.
+- `wakeword.py` — "hey saga" sobre el track del browser (el `WakeWordListener` oficial solo lee portaudio).
+- `onnx_tune.py` — capea threads de ONNX antes de instanciar cualquier `InferenceSession`.
 - `whisper_stt.py` — STT de fallback (faster-whisper local) si no hay `DEEPGRAM_API_KEY`.
 - `edge_tts_plugin.py` — TTS de fallback (edge-tts) si no hay key.
 
 ## Stack por default (si hay DEEPGRAM_API_KEY)
-- STT: `deepgram.STT("nova-3", language="es")` — streaming.
+- STT **push-to-talk**: `deepgram.STT("nova-3", language="es")` — streaming.
+- STT **llamada**: `deepgram.STTv2("flux-general-multi", eot_threshold=0.7, eager_eot_threshold=0.6, eot_timeout_ms=3000, keyterm=…, mip_opt_out=True)` — además de transcribir, **decide dónde termina el turno**. `language_hint` sobre `flux-general-en` devuelve **400**: por eso el modelo multi. `keyterm` y no `keyterms` (el plural está deprecado en el plugin). `mip_opt_out=True` = el audio NO se dona al programa de mejora de modelos de Deepgram (su default es participar).
 - TTS: `deepgram.TTS("aura-2-gloria-es")` — voz española neutra (constante `_DEEPGRAM_VOICE`).
 - VAD: `silero.VAD.load(activation_threshold=0.7)` — sube el piso para que el mic de laptop ignore ruido de fondo.
-- Fin de turno: **VAD puro** (silero, `activation_threshold 0.7`, `turn_detection="vad"`). El turno cierra por SILENCIO. (Antes era un turn detector semántico `MultilingualModel` que cerraba por el SENTIDO de la frase; U10 lo reemplazó por VAD puro → liberó ~1.8 GB de RAM y sacó el error "Error predicting end of turn".)
+- Fin de turno: **Flux** en llamada (`turn_detection="stt"`, acústica + lingüística); **VAD puro** en push-to-talk (`turn_detection="vad"`, cierra por SILENCIO con `min_delay` 1.2s). Antes había un turn detector semántico `MultilingualModel`; U10 lo reemplazó por VAD → −1.8 GB de RAM y se fue el error "Error predicting end of turn".
+- Interrupción: `mode="vad"` + `min_words=2` + `min_duration=0.5` + `resume_false_interruption`. El `adaptive` (detector ML, y lo único que habilita `backchannel_boundary`) **no se puede self-hosted**: `AdaptiveInterruptionDetector` sale por `LIVEKIT_INFERENCE_URL`/`API_KEY`, o sea LiveKit Cloud.
 - Ruido: en room se apoya en el VAD Silero (activation_threshold 0.7). BVC (`noise_cancellation`) NO se usa: requiere LiveKit Cloud y falla al aplicarse contra el server self-hosted.
 
 ### Config de turnos (`turn_handling`)
@@ -47,8 +53,13 @@ dispatch). `load_fnc=0` → el worker nunca se auto-marca `unavailable`: esa era
 `FileNotFoundError` intermitente (el prod `load_threshold=0.7` shedeaba bajo la carga de arranque →
 load-shedding de pools sobre un worker single-tenant), NO pestañas zombie ni un "server envenenado".
 `drain_timeout=0` → SIGTERM cierra al toque (libera el :8081, antes "draining" lo ocupaba). El worker corre
-con `session.start(..., room_input_options=RoomInputOptions(close_on_disconnect=False))` → recargar/cerrar la
-pestaña del orbe NO mata la sesión ni el socket de Win+Z.
+con `session.start(..., room_options=RoomOptions(close_on_disconnect=False))` → recargar/cerrar la
+pestaña del orbe NO mata la sesión ni el socket de Win+Z. (`RoomInputOptions`/`RoomOutputOptions` quedaron
+deprecados en el SDK y mueren en v2.0; `RoomOptions` tiene el mismo `close_on_disconnect`.)
+
+El **dispatch va por API** (`vc/dispatch.py`, desde `/token`), no automático ni firmado en el JWT:
+el automático despacha al *crearse* el room y el cliente le ganaba ~2s al registro del worker; el del
+token pide un job `JT_PARTICIPANT` que el SDK de Python no sabe atender (`ServerType` no lo tiene).
 
 ## Win+Z (3 fases, vía socket de control LK_CTL_SOCK)
 Máquina de 3 fases (`idle`/`rec`/`busy`): idle→graba · rec→corta y manda (`commit_user_turn`) ·

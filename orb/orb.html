@@ -12,6 +12,44 @@
          color:#eafaff;text-shadow:0 0 16px rgba(0,180,255,.45);letter-spacing:.3px;opacity:0;transition:opacity .4s;pointer-events:none;z-index:5}
   #conn{position:fixed;top:12px;right:14px;font-size:11px;color:#3a5667;z-index:6}
   #conn.ok{color:#2bd6a6} #conn.off{color:#e0556e}
+  /* ── control de micrófono (arriba a la izquierda, espejo de #conn) ──
+     Deliberadamente CALLADO: el orbe es el que habla. Mismo vidrio esmerilado que la barra de
+     adjuntar, pero sin halo propio — un segundo objeto brillando le compite al bloom de la esfera.
+     El color dice el estado y nada más: apagado cuando escucha, rojo cuando estás muteado. */
+  #mic{position:fixed;top:14px;left:16px;z-index:7;display:flex;align-items:center;
+       border-radius:19px;background:rgba(13,19,28,.5);
+       backdrop-filter:blur(22px) saturate(1.35);-webkit-backdrop-filter:blur(22px) saturate(1.35);
+       border:1px solid rgba(150,200,255,.10);
+       box-shadow:inset 0 1px 0 rgba(255,255,255,.05),0 4px 18px rgba(0,0,0,.35);
+       opacity:.62;transition:opacity .25s ease,border-color .25s ease}
+  #mic:hover,#mic:focus-within{opacity:1}
+  #mic.muted{opacity:1;border-color:rgba(224,85,110,.32)}   /* muteado NUNCA se desvanece */
+  #mic button{display:flex;align-items:center;justify-content:center;border:0;background:none;
+              padding:0;cursor:pointer;color:#9fc4d6;transition:color .18s}
+  #micbtn{width:46px;height:38px;border-radius:19px 0 0 19px}
+  #micbtn:hover{color:#eafaff}
+  #mic.muted #micbtn{color:#e0556e}
+  #micpick{width:28px;height:38px;border-radius:0 19px 19px 0;font-size:11px;color:#5d7a8c}
+  #micpick:hover{color:#eafaff}
+  #mic.solo #micpick{display:none}          /* un solo micrófono: el selector no aporta nada */
+  #mic.solo #micbtn{width:44px;border-radius:19px}
+  #mic .sep{width:1px;align-self:stretch;margin:9px 0;background:rgba(150,200,255,.12)}
+  #mic.solo .sep{display:none}
+  #miclist{position:fixed;top:60px;left:16px;z-index:7;min-width:236px;max-width:min(360px,82vw);
+           padding:6px;border-radius:16px;background:rgba(13,19,28,.72);
+           backdrop-filter:blur(22px) saturate(1.35);-webkit-backdrop-filter:blur(22px) saturate(1.35);
+           border:1px solid rgba(150,200,255,.10);
+           box-shadow:0 10px 40px rgba(0,0,0,.5);
+           display:none;flex-direction:column;gap:1px}
+  #miclist.open{display:flex}
+  #miclist button{width:100%;justify-content:flex-start;gap:9px;padding:9px 11px;border-radius:11px;
+                  font:13px/1.4 system-ui,sans-serif;color:#9fc4d6;text-align:left}
+  #miclist button:hover{background:rgba(150,200,255,.07);color:#eafaff}
+  /* el activo se marca con el magenta del proyecto, igual que el nodo líder de la barra */
+  #miclist button[aria-checked="true"]{color:#eafaff}
+  #miclist .dot{flex-shrink:0;width:5px;height:5px;border-radius:50%;background:transparent}
+  #miclist button[aria-checked="true"] .dot{background:#ff5bd0;box-shadow:0 0 7px rgba(255,91,208,.7)}
+  #miclist .nombre{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   #fallback{position:fixed;inset:0;display:none;align-items:center;justify-content:center;text-align:center;padding:30px;color:#9fc4d6;z-index:9}
   /* ── adjuntar: SOLO una barra. Se abre al llevar el mouse abajo (zona ancha + mouseenter,
      apertura instantánea). Al abrir, la red del orbe sube y se achica (modo mini). Autoguarda;
@@ -61,6 +99,25 @@
 <div id="wrap"></div>
 <div id="label"></div>
 <div id="conn">○</div>
+
+<!-- Control de micrófono. Oculto hasta que el track se publica: sin mic no hay nada que mutear,
+     y un botón muerto en pantalla es peor que ninguno. SVG inline porque el proyecto no carga
+     nada de CDN (three.js va vendorizado local). -->
+<div id="mic" hidden>
+  <button id="micbtn" type="button" aria-pressed="false" title="Mutear (M)" aria-label="Mutear micrófono">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <rect x="9" y="2" width="6" height="11" rx="3"/>
+      <path d="M5 10a7 7 0 0 0 14 0"/>
+      <line x1="12" y1="17" x2="12" y2="21"/>
+      <line id="micslash" x1="3" y1="3" x2="21" y2="21" style="display:none"/>
+    </svg>
+  </button>
+  <span class="sep"></span>
+  <button id="micpick" type="button" aria-haspopup="listbox" aria-expanded="false"
+          title="Elegir micrófono" aria-label="Elegir micrófono">▾</button>
+</div>
+<div id="miclist" role="listbox" aria-label="Micrófonos disponibles"></div>
 <div id="fallback"><div>No cargó WebGL/Three.js.<br>Verificá conexión y recargá.</div></div>
 
 <div id="hotzone"></div>
@@ -110,6 +167,10 @@ booted=true;
 const PH={
   idle:     {col:[0.22,0.88,1.0], speed:0.10, energy:0.25, glyph:''},
   rec:      {col:[1.00,0.33,0.47], speed:0.16, energy:0.55, glyph:'●  Grabando'},
+  // Modo LLAMADA: la línea está abierta esperándote. NO es 'rec' (rojo "Grabando"): eso sería
+  // la misma mentira que veníamos arreglando — en una llamada el mic vive abierto todo el rato,
+  // así que pintarlo como una grabación puntual no dice nada. Cian sereno, energía baja.
+  listen:   {col:[0.20,0.80,0.85], speed:0.13, energy:0.40, glyph:'◉  En línea'},
   transcribe:{col:[0.33,0.80,1.0],speed:0.20, energy:0.45, glyph:'◌  Transcribiendo'},
   screen:   {col:[0.73,0.53,0.97], speed:0.15, energy:0.55, glyph:'👁  Mirando pantalla'},
   think:    {col:[0.55,0.22,0.92], speed:0.22, energy:0.70, glyph:'✦  Pensando'},
@@ -496,17 +557,43 @@ const LOG = (...a) => console.log('[lk-client]', ...a);
 let room = null, micTrack = null, wakeEnabled = false;   // wake (U4): mic desmuteado siempre si ON
 
 // --- reproducir el TTS del worker (track remoto de audio) ---
+//
+// BUG DE VOLUMEN: antes esto SOLO appendeaba. `TrackSubscribed` dispara de nuevo en cada
+// reconexión (y con close_on_disconnect=False la pestaña sobrevive a todos los `saga-ctl
+// restart`), así que se acumulaban varios <audio> con el MISMO id reproduciendo el MISMO
+// track. Dos pipelines de playback sobre una sola fuente tienen jitter buffers independientes
+// -> se desfasan unos milisegundos -> interferencia destructiva (comb filtering). No se
+// escucha como eco: se escucha como que el volumen se desplomó de la nada. Idem los
+// AnalyserNode huérfanos, que quedaban colgados del mismo AudioContext.
+//
+// Ahora cada attach LIMPIA el anterior: un solo elemento sonando, siempre.
+let _ttsEl = null;
+
+function _detachRemoteAudio(){
+  if (_ttsEl){
+    try { _ttsEl.pause(); _ttsEl.srcObject = null; } catch(e){}
+    _ttsEl.remove();
+    _ttsEl = null;
+  }
+  // por las dudas: si quedó alguno de una sesión anterior a este fix, se va igual
+  document.querySelectorAll('#saga-tts-audio').forEach(el => el.remove());
+  if (_ttsSrc){ try { _ttsSrc.disconnect(); } catch(e){} _ttsSrc = null; }
+  if (_ttsAnalyser){ try { _ttsAnalyser.disconnect(); } catch(e){} _ttsAnalyser = null; }
+}
+
 function attachRemoteAudio(track){
+  _detachRemoteAudio();          // nunca dos elementos sobre el mismo track
   const el = track.attach();
   el.id = 'saga-tts-audio'; el.autoplay = true;
   document.body.appendChild(el);
+  _ttsEl = el;
   LOG('TTS track attached -> playing');
   _setupTTSAnalyser(track);   // U5: medir el nivel real para sincronizar el orbe
 }
 
 // --- U5: Web Audio sobre el track TTS -> nivel REAL de la voz para que el orbe lata sincronizado.
 // El room nos da el track directo (en console era imposible: audio en otro proceso). ---
-let _audioCtx = null, _ttsAnalyser = null, _ttsData = null;
+let _audioCtx = null, _ttsAnalyser = null, _ttsData = null, _ttsSrc = null;
 function _setupTTSAnalyser(track){
   try {
     _audioCtx = _audioCtx || new (window.AudioContext || window.webkitAudioContext)();
@@ -519,6 +606,7 @@ function _setupTTSAnalyser(track){
     }
     const ms = new MediaStream([track.mediaStreamTrack]);
     const src = _audioCtx.createMediaStreamSource(ms);
+    _ttsSrc = src;   // guardado para desconectarlo en el próximo attach (ver _detachRemoteAudio)
     _ttsAnalyser = _audioCtx.createAnalyser();
     _ttsAnalyser.fftSize = 256;
     _ttsAnalyser.smoothingTimeConstant = 0.85;   // más suave: envolvente, no jitter por-frame
@@ -553,11 +641,131 @@ function showUnlock(r){
 // Con wake ON (U4) el gate NO aplica: el mic queda DESMUTEADO siempre para que el server oiga
 // "hey saga". El STT del worker igual está gateado server-side (set_audio_enabled) -> no procesa
 // hasta el wake; el detector de wake lee el track directo.
+// `orbstate` viaja por window entre los DOS módulos (el de three.js lo despacha, este lo escucha),
+// así que el estado hay que trackearlo acá: la `mode` del otro módulo no está en este scope.
+let estadoActual = 'idle';
+
 window.addEventListener('orbstate', (e) => {
-  if (!micTrack || wakeEnabled) return;
+  estadoActual = e.detail;
+  if (!micTrack || userMuted) return;    // el mute MANUAL le gana al gate automático
+  if (wakeEnabled) return;
   const rec = e.detail === 'rec';
   try { rec ? micTrack.unmute() : micTrack.mute(); } catch(err){}
 });
+
+// ─────────────────────── control de micrófono (mute + elegir device) ───────────────────────
+//
+// Lo funcional está calcado del starter de LiveKit (saga-gemini/web, AgentTrackControl), pero
+// sobre el SDK pelado: acá no hay React ni @livekit/components-react, así que en vez de los hooks
+// se usan las tres primitivas que esos hooks envuelven:
+//
+//   mute/unmute   -> micTrack.mute() / .unmute()          (ya se usaban en el gate de arriba)
+//   listar        -> Room.getLocalDevices('audioinput')
+//   cambiar       -> room.switchActiveDevice('audioinput', id)
+//
+// Dos cosas NO obvias que trae ese código y que acá también aplican:
+//
+//  1. Antes de conceder permiso, el browser devuelve devices con `deviceId` y `label` VACÍOS. Por
+//     eso se filtran. Y una lista vacía ANTES del permiso no significa "no hay micrófonos": si se
+//     tomara como tal, el botón se deshabilitaría antes de que el usuario pueda dar permiso.
+//     Acá el problema no existe mientras el track ya esté publicado (el permiso ya se dio en
+//     `publishMic`), que es justo por lo que el control aparece recién ahí.
+//  2. El mute manual tiene que sobrevivir al gate automático de `orbstate`, si no el próximo
+//     cambio de estado te desmutea solo y el botón miente.
+let userMuted = false, micDevices = [], micDeviceId = '';
+
+const $mic  = document.getElementById('mic');
+const $btn  = document.getElementById('micbtn');
+const $pick = document.getElementById('micpick');
+const $list = document.getElementById('miclist');
+const $slash= document.getElementById('micslash');
+
+function pintarMic(){
+  $mic.classList.toggle('muted', userMuted);
+  $mic.classList.toggle('solo', micDevices.length < 2);   // 1 device: el selector no aporta nada
+  $slash.style.display = userMuted ? '' : 'none';
+  $btn.setAttribute('aria-pressed', String(userMuted));
+  $btn.title = userMuted ? 'Desmutear (M)' : 'Mutear (M)';
+  $btn.setAttribute('aria-label', $btn.title);
+}
+
+function aplicarMute(){
+  if (!micTrack) { pintarMic(); return; }   // repintar igual: el botón no puede mentir sobre su estado
+  try {
+    if (userMuted) micTrack.mute();
+    // Al desmutear NO forzamos unmute a ciegas: devolvemos el track a lo que manda el gate
+    // (wake ON -> siempre abierto; si no, sólo en 'rec'). Desmutear a mano en push-to-talk sin
+    // estar grabando dejaría el mic vivo cuando saga no está escuchando.
+    else if (wakeEnabled || estadoActual === 'rec' || estadoActual === 'listen') micTrack.unmute();
+    else micTrack.mute();
+  } catch(err){ LOG('mute:', (err && err.message) || err); }
+  pintarMic();
+}
+
+function toggleMute(){ userMuted = !userMuted; aplicarMute(); LOG(userMuted ? 'mic MUTEADO' : 'mic abierto'); }
+
+async function cargarDevices(){
+  try {
+    const todos = await Room.getLocalDevices('audioinput');
+    micDevices = todos.filter(d => !!d.deviceId);   // id vacío = todavía sin permiso, no es usable
+    if (!micDeviceId){
+      const activo = micTrack && micTrack.mediaStreamTrack &&
+                     micTrack.mediaStreamTrack.getSettings().deviceId;
+      micDeviceId = activo || (micDevices[0] && micDevices[0].deviceId) || '';
+    }
+    pintarLista(); pintarMic();
+  } catch(err){ LOG('no pude listar micrófonos:', (err && err.message) || err); }
+}
+
+function pintarLista(){
+  $list.textContent = '';
+  micDevices.forEach((d, i) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.setAttribute('role','option');
+    b.setAttribute('aria-checked', String(d.deviceId === micDeviceId));
+    const dot = document.createElement('span'); dot.className = 'dot';
+    const n = document.createElement('span'); n.className = 'nombre';
+    n.textContent = d.label || `Micrófono ${i+1}`;   // sin permiso el label viene vacío
+    b.append(dot, n);
+    b.addEventListener('click', () => elegirDevice(d.deviceId));
+    $list.appendChild(b);
+  });
+}
+
+async function elegirDevice(id){
+  cerrarLista();
+  if (!room || id === micDeviceId) return;
+  try {
+    await room.switchActiveDevice('audioinput', id);
+    micDeviceId = id;
+    pintarLista();
+    LOG('micrófono ->', (micDevices.find(d => d.deviceId === id) || {}).label || id);
+  } catch(err){ LOG('no pude cambiar de micrófono:', (err && err.message) || err); }
+}
+
+function abrirLista(){ $list.classList.add('open'); $pick.setAttribute('aria-expanded','true'); }
+function cerrarLista(){ $list.classList.remove('open'); $pick.setAttribute('aria-expanded','false'); }
+
+$btn.addEventListener('click', toggleMute);
+$pick.addEventListener('click', () => {
+  if ($list.classList.contains('open')) { cerrarLista(); return; }
+  cargarDevices().then(abrirLista);
+});
+document.addEventListener('click', (e) => {
+  if (!$list.contains(e.target) && !$mic.contains(e.target)) cerrarLista();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') cerrarLista();
+  // "M" para mutear, pero NO mientras escribís en la barra de adjuntar
+  const escribiendo = e.target && (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT');
+  if (!escribiendo && (e.key === 'm' || e.key === 'M') && !e.ctrlKey && !e.metaKey && !e.altKey){
+    toggleMute();
+  }
+});
+// El SO puede sumar o sacar micrófonos con la pestaña abierta (auriculares BT, dock USB).
+try {
+  navigator.mediaDevices.addEventListener('devicechange', () => { cargarDevices(); });
+} catch(err){}
 
 async function publishMic(r){
   try {
@@ -569,6 +777,10 @@ async function publishMic(r){
       await micTrack.mute();                        // arranca MUTEADO (default: privacidad)
       LOG('mic publicado (muteado)');
     }
+    // Recién ahora aparece el control: con el track publicado el permiso YA está dado, así que
+    // listar los devices no dispara un segundo prompt y los labels vienen con nombre de verdad.
+    $mic.hidden = false;
+    cargarDevices();
   } catch (err) { LOG('no se pudo publicar el mic:', (err && err.message) || err); }
 }
 
@@ -590,6 +802,9 @@ async function start(){
     .on(RoomEvent.Disconnected,  () => LOG('room disconnected'))
     .on(RoomEvent.Reconnected,   () => LOG('room reconnected'))
     .on(RoomEvent.AudioPlaybackStatusChanged, () => { if (!room.canPlaybackAudio) showUnlock(room); })
+    .on(RoomEvent.TrackUnsubscribed, (track) => {
+      if (track.kind === Track.Kind.Audio) _detachRemoteAudio();
+    })
     .on(RoomEvent.TrackSubscribed, (track) => {
       if (track.kind === Track.Kind.Audio) attachRemoteAudio(track);
     });

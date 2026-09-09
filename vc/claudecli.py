@@ -1,6 +1,11 @@
 """Invocación a Claude. Camino rápido: daemon persistente (proceso `claude`
 caliente, sin cold-start). Fallback robusto: spawn one-shot `claude -p` (lo de
-siempre) si el daemon no está o falla. Maneja sesión e imagen."""
+siempre) si el daemon no está o falla. Maneja sesión e imagen.
+
+El stream NO son strings sueltos: son `Ev` (texto / tool / break). El `break` marca
+el fin de un BLOQUE hablable — Claude deja de hablar y se va a usar tools. El
+consumidor cierra ahí su segmento de TTS, así el hueco de trabajo pasa sin ningún
+websocket abierto (era lo que Deepgram mataba por inactividad)."""
 
 import os
 import sys
@@ -9,8 +14,10 @@ import json
 import time
 import socket
 import subprocess
+import threading
 from pathlib import Path
-from typing import Callable, Iterator
+from typing import Callable, Generator, NamedTuple
+
 
 from .config import (
     CLAUDE_TIMEOUT_S,
@@ -20,6 +27,18 @@ from .config import (
 )
 from .runtime import log, _cancel
 from .session import get_active_session_id, touch_session, reset_session
+
+
+class Ev(NamedTuple):
+    """Evento del stream de Claude.
+
+    kind="text"   -> `text` es hablable, mandalo al TTS
+    kind="tool"   -> `tool` es el nombre de la tool que arrancó (informativo: orbe/log)
+    kind="break"  -> fin de bloque: cerrá el segmento de voz y volvé a "pensando"
+    """
+    kind: str
+    text: str = ""
+    tool: str = ""
 
 
 # ───────────────────────── daemon (camino rápido) ─────────────────────────
@@ -65,9 +84,11 @@ def reset_claude() -> None:
         reset_session()
 
 
-def _ask_via_daemon(prompt: str, on_first_token) -> "Iterator[str]":
-    """Cliente del daemon. Yieldea text_deltas. Devuelve (via return) True si el
-    daemon manejó el turno, False si hay que caer al fallback one-shot."""
+def _ask_via_daemon(prompt: str, on_first_token, image_b64: "str | None" = None,
+                    cancel: "threading.Event | None" = None) -> "Generator[Ev, None, bool]":
+    """Cliente del daemon. Yieldea `Ev`. Devuelve (via return) True si el daemon
+    manejó el turno, False si hay que caer al fallback one-shot."""
+    stop = cancel if cancel is not None else _cancel
     try:
         conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         conn.settimeout(3.0)
@@ -75,14 +96,17 @@ def _ask_via_daemon(prompt: str, on_first_token) -> "Iterator[str]":
     except OSError:
         return False
     try:
-        conn.sendall((json.dumps({"prompt": prompt}) + "\n").encode())
-        conn.settimeout(1.0)   # recv corto -> permite chequear _cancel entre chunks
+        req = {"prompt": prompt}
+        if image_b64:
+            req["image_b64"] = image_b64   # el daemon ya soporta multimodal
+        conn.sendall((json.dumps(req) + "\n").encode())
+        conn.settimeout(1.0)   # recv corto -> permite chequear la cancelación entre chunks
         buf = b""
         first = False
         any_delta = False
         deadline = time.time() + CLAUDE_TIMEOUT_S
         while True:
-            if _cancel.is_set():
+            if stop.is_set():
                 return True   # cancelado: el daemon drena solo; turno "manejado"
             if time.time() > deadline:
                 log("daemon claude timeout -> no re-mando (el daemon tiene su propio timeout; evito turno+memoria duplicados)")
@@ -112,7 +136,11 @@ def _ask_via_daemon(prompt: str, on_first_token) -> "Iterator[str]":
                                 pass
                         first = True
                     any_delta = True
-                    yield o["delta"]
+                    yield Ev("text", text=o["delta"])
+                elif "tool" in o:
+                    yield Ev("tool", tool=o["tool"])
+                elif o.get("break"):
+                    yield Ev("break")
                 elif o.get("done"):
                     touch_session()
                     log("claude daemon turn OK")
@@ -132,9 +160,11 @@ def _ask_oneshot(
     prompt: str,
     on_first_token: "Callable[[], None] | None",
     screenshot_path: "Path | None",
-) -> Iterator[str]:
+    cancel: "threading.Event | None" = None,
+) -> "Generator[Ev, None, None]":
     """Spawn `claude -p` de un solo turno (lo que anduvo siempre). Maneja imagen
     y el fallback --resume/--session-id. Es el camino seguro si el daemon falla."""
+    stop = cancel if cancel is not None else _cancel
     has_image = screenshot_path is not None and screenshot_path.exists()
     session_id, is_new = get_active_session_id()
     first_flag = "--session-id" if is_new else "--resume"
@@ -187,7 +217,7 @@ def _ask_oneshot(
         assert proc.stdout is not None
         deadline = time.time() + CLAUDE_TIMEOUT_S
         for raw_line in proc.stdout:
-            if _cancel.is_set():
+            if stop.is_set():
                 log("stream cancelled, breaking")
                 break
             if time.time() > deadline:
@@ -203,11 +233,21 @@ def _ask_oneshot(
             if obj.get("type") != "stream_event":
                 continue
             event = obj.get("event", {})
-            if event.get("type") != "content_block_delta":
+            etype = event.get("type")
+            if etype == "content_block_start":
+                cb = event.get("content_block", {})
+                if cb.get("type") == "tool_use":
+                    yield Ev("tool", tool=cb.get("name") or "?")
+                continue
+            if etype == "message_delta":
+                if event.get("delta", {}).get("stop_reason") == "tool_use":
+                    yield Ev("break")   # fin de bloque: cerrar el segmento de voz
+                continue
+            if etype != "content_block_delta":
                 continue
             delta = event.get("delta", {})
             if delta.get("type") != "text_delta":
-                continue
+                continue   # `thinking_delta` y demás NO son hablables
             text = delta.get("text", "")
             if text:
                 if not text_received:
@@ -217,7 +257,7 @@ def _ask_oneshot(
                         except Exception:
                             pass
                     text_received = True
-                yield text
+                yield Ev("text", text=text)
         try:
             proc.wait(timeout=3)
         except subprocess.TimeoutExpired:
@@ -227,7 +267,7 @@ def _ask_oneshot(
             except subprocess.TimeoutExpired:
                 proc.kill()
 
-        if _cancel.is_set():
+        if stop.is_set():
             return
 
         err = ""
@@ -257,16 +297,28 @@ def ask_claude_stream(
     prompt: str,
     on_first_token: "Callable[[], None] | None" = None,
     screenshot_path: "Path | None" = None,
-) -> Iterator[str]:
-    """Stream de text_deltas de Claude. Daemon caliente primero; si no, one-shot.
-    Las imágenes van directo al one-shot (más simple/probado para multimodal)."""
+    cancel: "threading.Event | None" = None,
+) -> "Generator[Ev, None, None]":
+    """Stream de eventos de Claude. Daemon caliente primero; si no, one-shot.
+
+    Las imágenes TAMBIÉN van por el daemon (soporta multimodal desde siempre). Antes se
+    desviaban al one-shot: eso spawneaba un `claude` aparte que escribía en el store
+    mientras el proceso del daemon seguía con su contexto viejo en RAM -> los dos
+    contextos BIFURCABAN y el turno siguiente respondía como si el turno con imagen
+    nunca hubiera existido."""
     has_image = screenshot_path is not None and screenshot_path.exists()
     log(f"claude prompt{' [+img]' if has_image else ''}: {prompt!r}")
 
-    if not has_image:
-        handled = yield from _ask_via_daemon(prompt, on_first_token)
-        if handled:
-            return
-        log("daemon claude no disponible -> fallback one-shot")
+    img_b64: "str | None" = None
+    if has_image and screenshot_path is not None:
+        try:
+            img_b64 = base64.b64encode(screenshot_path.read_bytes()).decode("ascii")
+        except Exception as e:
+            log(f"image encode EXC: {type(e).__name__}: {e}, text-only")
 
-    yield from _ask_oneshot(prompt, on_first_token, screenshot_path)
+    handled = yield from _ask_via_daemon(prompt, on_first_token, img_b64, cancel)
+    if handled:
+        return
+    log("daemon claude no disponible -> fallback one-shot")
+
+    yield from _ask_oneshot(prompt, on_first_token, screenshot_path, cancel)

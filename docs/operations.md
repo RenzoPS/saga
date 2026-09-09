@@ -19,7 +19,7 @@ saga-ctl restart    # stop + start
 2. `claude_daemon` (cerebro caliente) — `prewarm_claude()`, dedup-safe (se reusa si ya corre).
 3. `orb_server` (orbe + endpoint `/token`) — `ensure_orb()`, dedup-safe (se reusa si ya corre).
 4. worker `lk/agent.py start` — relanzado fresco; se espera "registered worker" en el log ANTES de seguir.
-5. abre el browser cliente (`xdg-open` al orbe) — al unirse al room dispara el dispatch AUTOMÁTICO del worker.
+5. abre el browser cliente (`xdg-open` al orbe) — al pedir el token dispara el dispatch del worker **por API** (`vc/dispatch.py`).
 6. espera a que el socket de control `LK_CTL_SOCK` responda (readiness real del agente, ya despachado).
 
 Siempre con el venv del proyecto: `.venv/bin/python`.
@@ -28,12 +28,31 @@ Siempre con el venv del proyecto: `.venv/bin/python`.
 .venv/bin/python lk/agent.py start     # worker en modo room (lo lanza saga-ctl; rara vez a mano)
 ```
 
-## Uso (Win+Z, push-to-talk)
+## Uso — push-to-talk (default)
 
 - **idle → Win+Z**: graba.
-- **rec → Win+Z** (o ~2s de silencio): corta y manda el turno.
+- **rec → Win+Z** (o ~1.2s de silencio): corta y manda el turno.
 - **busy → Win+Z**: mata la respuesta en curso.
+
+## Uso — llamada (`SAGA_MODE=call saga-ctl start`)
+
+- **Win+Z**: levanta el tubo; la línea queda abierta (orbe "◉ En línea", cian).
+- El fin de cada turno lo corta **Flux**, no un umbral de silencio. La fase **nunca vuelve a `idle`**
+  entre turnos: eso es lo que distingue una llamada de un walkie-talkie.
+- **Win+Z de nuevo**: colgás. También cuelga sola tras `SAGA_CALL_IDLE_TIMEOUT_S` (180s).
+- **Barge-in**: hablale encima. Necesita ≥ `SAGA_INTERRUPT_MIN_WORDS` (2) palabras.
+
+> ⚠️ **El modo no es pegajoso.** Sale del env de la shell, no de un archivo. Un `saga-ctl restart`
+> sin `SAGA_MODE=call` te devuelve a push-to-talk + Nova-3 **en silencio** — solo se ve en el log:
+> `[lk] STT: Deepgram Nova-3` en vez de `Deepgram Flux`.
+
+## En los dos modos
+
 - **Visión**: decí "mirá la pantalla" / "qué ves" → captura con grim, se la manda a Claude, y la borra.
+- **Reset por voz**: "nueva sesión", "empezamos de cero", "olvidate de todo". Sin esto la conversación
+  **no expira nunca**, ni entre reinicios de saga (`session use ->` en el log, contra `session new ->`).
+- **Micrófono** (orbe, arriba a la izquierda): clic o tecla `M` para mutear; la flechita lista los
+  dispositivos de entrada. El mute manual le gana al gate automático por estado.
 
 Ver `turn-flow.md` para el detalle.
 
