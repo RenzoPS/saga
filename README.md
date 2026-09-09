@@ -25,16 +25,25 @@ el objeto `PH` de [`orb/orb.html`](orb/orb.html)— y las transiciones se interp
 saltar. Mientras habla, el orbe **late con el nivel real del audio del TTS** (Web Audio), no con
 una animación de relleno.
 
-| | |
-|:--:|:--:|
-| ![Orbe en estado idle](docs/img/orbe-idle.png) | ![Orbe grabando](docs/img/orbe-rec.png) |
-| **`idle`** · en espera, cian sereno | **`rec`** · te está escuchando |
-| ![Orbe pensando](docs/img/orbe-think.png) | ![Orbe hablando](docs/img/orbe-speak.png) |
-| **`think`** · Claude Code resolviendo el turno | **`speak`** · la red late con la voz |
+**`idle`** — en espera. Cian sereno, energía baja, casi sin movimiento.
 
-Hay más estados que los cuatro de arriba: `listen` (línea abierta en modo llamada),
-`transcribe`, `screen` (mirando pantalla), y transitorios como `nueva`, `error`, `cancel` y
-`attach`, que se muestran un ratito y vuelven solos al estado de base.
+![Orbe en estado idle](docs/img/orbe-idle.png)
+
+**`rec`** — te está escuchando. La red se contrae y se tiñe de rojo.
+
+![Orbe grabando](docs/img/orbe-rec.png)
+
+**`think`** — Claude Code resolviendo el turno. Violeta, más rápido y más denso.
+
+![Orbe pensando](docs/img/orbe-think.png)
+
+**`speak`** — hablando. Verde a máxima energía, latiendo con el audio real del TTS.
+
+![Orbe hablando](docs/img/orbe-speak.png)
+
+Hay más estados que estos cuatro: `listen` (línea abierta en modo llamada), `transcribe`,
+`screen` (mirando pantalla), y transitorios como `nueva`, `error`, `cancel` y `attach`, que se
+muestran un ratito y vuelven solos al estado de base.
 
 ## Flujo
 
