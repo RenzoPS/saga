@@ -7,3 +7,8 @@
 # UPGRADE (no por aceptación): aiohttp 3.13.5→3.14.1, pillow 12.2→12.3, nltk 3.9.4→3.10, pip→26.x.
 # `pip-audit` local (venv completo) y por la vía del CI (-r requirements.txt) dan ambos limpio.
 # Si en el futuro aparece un CVE en una transitiva SIN fix disponible, se agrega acá CON justificación.
+#
+# ESTADO 2026-09-09: SIGUE VACÍA. Aparecieron 5 CVEs nuevos (el job `audit` venía fallando desde
+# el 2026-08-07) y se cerraron otra vez por UPGRADE: aiohttp 3.14.1→3.14.3 (PYSEC-2026-3545/3546/
+# 3547) y setuptools 82.0.1→84.0.0 (PYSEC-2026-3447). Verificado: `pip-audit -r requirements.txt`
+# sin hallazgos y los 133 tests en verde con las versiones nuevas.
